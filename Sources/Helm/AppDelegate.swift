@@ -36,7 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func toggle() { panel.isVisible ? hide() : show() }
 
     private func show() {
-        panel.positionAtTop()
+        panel.positionUpperMiddle()
         panel.makeKeyAndOrderFront(nil)   // nonactivating: keys come to us, app stays inactive
         installKeyMonitor()
         model.startTicking()              // age labels count up while open
@@ -46,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func hide() {
         removeKeyMonitor()
         model.stopTicking()
+        model.exitFocus()                 // next summon starts at the full list
         panel.orderOut(nil)               // focus returns to whatever was active (the terminal)
     }
 
@@ -53,13 +54,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func pick(_ session: ChatSession) {
         hide()
-        TerminalDispatcher.resume(sessionId: session.sessionId, cwd: session.cwd)
+        TerminalDispatcher.resume(sessionId: session.sessionId, cwd: session.cwd, pid: session.pid)
     }
 
     private func newChat() {
         let cwd = model.selectedSession?.cwd
         hide()
         TerminalDispatcher.newChat(cwd: cwd?.nonEmpty ?? NSHomeDirectory())
+    }
+
+    /// Kill the selected live session (idle → dead) and close its terminal pane. Resolve
+    /// the pane (via tty) before terminating, or `ps` can't map the pid. Only live rows
+    /// have a pid; the row stays as a resumable cold row afterward.
+    private func killSelected() {
+        guard let s = model.selectedSession, let pid = s.pid else { return }
+        TerminalDispatcher.closePane(pid: pid)
+        SessionStore.terminate(pid)
+        SessionStore.clearState(s.sessionId)   // SessionEnd hook won't run on a killed proc
+        model.markDead(s.sessionId)            // optimistic: flip to dead now, don't await poll
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.model.reloadInBackground()   // reconcile with the filesystem
+        }
     }
 
     // MARK: Key handling (local monitor while visible)
@@ -80,15 +95,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Returns true if the event was consumed.
     private func handle(_ event: NSEvent) -> Bool {
         let cmd = event.modifierFlags.contains(.command)
+        let option = event.modifierFlags.contains(.option)
 
         switch Int(event.keyCode) {
-        case kVK_Escape:      hide();                       return true
+        case kVK_Escape:
+            if model.focusedProject != nil { model.exitFocus() } else { hide() }
+            return true
         case kVK_Return, kVK_ANSI_KeypadEnter:
             if let s = model.selectedSession { pick(s) };   return true
-        case kVK_DownArrow:   model.move(by: 1);            return true
-        case kVK_UpArrow:     model.move(by: -1);           return true
-        case kVK_Delete:      model.backspaceQuery();       return true
+        case kVK_DownArrow where cmd: model.focusSelectedProject();       return true
+        case kVK_UpArrow where cmd:   model.exitFocus();                  return true
+        case kVK_DownArrow:   model.clearSelection(); model.move(by: 1);  return true
+        case kVK_UpArrow:     model.clearSelection(); model.move(by: -1); return true
+        case kVK_ANSI_A where cmd: model.selectAllQuery();  return true
+        case kVK_Delete:
+            if cmd        { model.clearQuery() }
+            else if option { model.deleteWordBack() }
+            else           { model.backspaceQuery() }
+            return true
         case kVK_ANSI_N where cmd: newChat();               return true
+        case kVK_ANSI_X where cmd: killSelected();          return true
         default: break
         }
 

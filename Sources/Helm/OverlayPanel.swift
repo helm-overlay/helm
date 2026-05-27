@@ -1,12 +1,14 @@
 import Cocoa
 
-/// Non-activating, borderless floating panel pinned to the top of the active screen.
-/// Becomes key (so it receives keystrokes) without activating the app — focus returns
-/// to the terminal the moment it's ordered out.
+/// Non-activating, borderless floating panel placed in the upper-middle of the active
+/// screen (Raycast/Spotlight style). Becomes key (so it receives keystrokes) without
+/// activating the app — focus returns to the terminal the moment it's ordered out.
 final class OverlayPanel: NSPanel {
     private let panelWidth: CGFloat = 780
     private let panelHeight: CGFloat = 520
-    private let topInset: CGFloat = 8
+    /// Fraction of the vertical slack left above the panel. Below 0.5 sits it above
+    /// dead center; Raycast's launcher feel lands around the upper third.
+    private let topBias: CGFloat = 0.26
 
     init(content: NSView) {
         super.init(contentRect: NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight),
@@ -30,12 +32,13 @@ final class OverlayPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
-    /// Center horizontally on the screen under the cursor, pinned just below the top edge.
-    func positionAtTop() {
+    /// Place the panel in the upper-middle of the screen under the cursor.
+    func positionUpperMiddle() {
         let screen = screenUnderCursor ?? NSScreen.main ?? NSScreen.screens.first
         guard let visible = screen?.visibleFrame else { return }
+        let slack = max(0, visible.height - panelHeight)
         let x = visible.midX - panelWidth / 2
-        let y = visible.maxY - panelHeight - topInset
+        let y = visible.maxY - panelHeight - slack * topBias
         setFrame(NSRect(x: x, y: y, width: panelWidth, height: panelHeight), display: true)
     }
 

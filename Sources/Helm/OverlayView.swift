@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import HelmCore
 
 struct OverlayView: View {
@@ -28,9 +29,26 @@ struct OverlayView: View {
     private var header: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            Text(model.query.isEmpty ? "Type to filter sessions…" : model.query)
-                .foregroundStyle(model.query.isEmpty ? .secondary : .primary)
-                .font(.system(size: 15, weight: .regular))
+            HStack(spacing: 2) {
+                if model.query.isEmpty {
+                    ZStack(alignment: .leading) {
+                        Text("Type to filter sessions…")
+                            .foregroundStyle(.secondary)
+                            .font(.system(size: 15, weight: .regular))
+                        BlinkingCursor(anchor: model.lastEdit)
+                    }
+                } else {
+                    Text(model.query)
+                        .foregroundStyle(.primary)
+                        .font(.system(size: 15, weight: .regular))
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(model.querySelected ? Color.accentColor.opacity(0.35) : .clear)
+                                .padding(.horizontal, -4)   // bleed the highlight without moving the text
+                        )
+                    if !model.querySelected { BlinkingCursor(anchor: model.lastEdit) }
+                }
+            }
             Spacer()
             Text("\(model.liveCount) live · \(model.totalCount) total")
                 .font(.system(size: 11)).foregroundStyle(.tertiary)
@@ -56,10 +74,7 @@ struct OverlayView: View {
                             }
                             if group.hiddenCount > 0 {
                                 CollapseTail(label: "+\(group.hiddenCount) older")
-                                    .onTapGesture { model.toggleExpanded(group.project) }
-                            } else if group.expanded {
-                                CollapseTail(label: "show less")
-                                    .onTapGesture { model.toggleExpanded(group.project) }
+                                    .onTapGesture { model.toggleFocus(group.project) }
                             }
                         } header: {
                             GroupHeader(project: group.project)
@@ -85,8 +100,16 @@ struct OverlayView: View {
         HStack(spacing: 16) {
             hint("↑↓", "navigate")
             hint("↵", "open")
-            hint("⌘N", "new chat")
-            hint("esc", "dismiss")
+            if model.focusedProject == nil {
+                hint("⌘↓", "focus project")
+                hint("⌘N", "new chat")
+                hint("⌘X", "kill")
+                hint("esc", "dismiss")
+            } else {
+                hint("⌘N", "new chat")
+                hint("⌘X", "kill")
+                hint("esc", "back")
+            }
             Spacer()
         }
         .font(.system(size: 11))
@@ -100,6 +123,22 @@ struct OverlayView: View {
                 .padding(.horizontal, 5).padding(.vertical, 1)
                 .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
             Text(label)
+        }
+    }
+}
+
+/// A vertical-bar insertion caret that blinks on a fixed cadence, phased so it is
+/// solid-on at `anchor` (the last edit) — the caret never blinks off mid-keystroke.
+private struct BlinkingCursor: View {
+    let anchor: Date
+    private let period = 0.53
+    var body: some View {
+        TimelineView(.periodic(from: anchor, by: period)) { ctx in
+            let on = Int(ctx.date.timeIntervalSince(anchor) / period) % 2 == 0
+            RoundedRectangle(cornerRadius: 1)
+                .fill(Color.primary)
+                .frame(width: 2, height: 18)
+                .opacity(on ? 1 : 0)
         }
     }
 }
@@ -136,33 +175,167 @@ private struct SessionRow: View {
     let now: Date
 
     var body: some View {
-        HStack(spacing: 10) {
-            Circle().fill(dotColor).frame(width: 8, height: 8)
-                .overlay(Circle().stroke(.white.opacity(0.15), lineWidth: 0.5))
-            Text(session.label).lineLimit(1)
-                .font(.system(size: 14))
-            Spacer(minLength: 12)
-            if let kind = session.kind {
-                Text(kind).font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 5).padding(.vertical, 1)
-                    .background(.white.opacity(0.07), in: Capsule())
+        HStack(spacing: 0) {
+            OrbitIndicator(state: session.state, needsInput: session.needsInput)
+                .frame(width: 14, height: 14)
+            HStack(spacing: 10) {
+                Text(session.label).lineLimit(1)
+                    .font(.system(size: 14))
+                Spacer(minLength: 12)
+                if let kind = session.kind {
+                    Text(kind).font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(.white.opacity(0.06), in: Capsule())
+                }
+                Text(SessionStore.ageLabel(now.timeIntervalSince(session.lastActive)))
+                    .font(.system(size: 11)).foregroundStyle(.tertiary)
+                    .frame(width: 48, alignment: .trailing)
             }
-            Text(SessionStore.ageLabel(now.timeIntervalSince(session.lastActive)))
-                .font(.system(size: 11)).foregroundStyle(.tertiary)
-                .frame(width: 48, alignment: .trailing)
+            .padding(.leading, 12)
         }
-        .padding(.horizontal, 12).padding(.vertical, 7)
-        .background(selected ? Color.accentColor.opacity(0.28) : .clear,
+        .padding(.leading, 12).padding(.trailing, 12).padding(.vertical, 7)
+        .frame(maxWidth: .infinity)
+        .background(selected ? Color.white.opacity(0.09) : .clear,
                     in: RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal, 8)
     }
+}
 
-    private var dotColor: Color {
-        switch session.state {
-        case .liveBusy: return .green
-        case .liveIdle: return .secondary
-        case .cold:     return .clear
+/// Orbit-metaphor status indicator. The ring is always present; only the satellite's
+/// behavior encodes state — it circles for `liveBusy` (motion == alive now), parks at
+/// 9 o'clock for `liveIdle`, and is gone (ring goes dashed) for `cold`. An idle session
+/// that's waiting on the user (`needsInput`) parks in amber and *knocks* (pulses).
+/// Transitions glide/fade rather than snap. Reduce-motion parks busy at the top and
+/// holds the knock steady.
+private struct OrbitIndicator: View {
+    let state: SessionState
+    var needsInput: Bool = false
+
+    private static let emerald = Color(red: 0.204, green: 0.827, blue: 0.600)  // #34D399
+    private static let amber = Color(red: 0.984, green: 0.749, blue: 0.141)    // #FBBF24
+    private static let gray = Color.white.opacity(0.28)
+    private static let center = CGPoint(x: 7, y: 7)
+    private static let radius: CGFloat = 6.5
+    private static let park: Double = 180          // 9 o'clock, in degrees
+    private static let degPerSec = 360.0 / 2.5     // one revolution / 2.5s
+
+    @State private var spin: Double = park          // satellite angle (deg, accumulates)
+    @State private var satelliteOpacity: Double = 1
+    @State private var dashed = false               // ring style; flips after the dead fade
+    @State private var lastTick: Date?
+
+    private var reduceMotion: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+    private let tick = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        ZStack {
+            ring
+            satellite
+        }
+        .frame(width: 14, height: 14)
+        .onAppear(perform: configureForAppear)
+        .onReceive(tick, perform: advance)
+        .onChange(of: state) { _, new in transition(to: new) }
+    }
+
+    /// idle + waiting on the user. Drives the amber colorway and the pulse.
+    private var knock: Bool { state == .liveIdle && needsInput }
+
+    private var ringColor: Color {
+        if state == .liveBusy { return Self.emerald.opacity(0.25) }
+        if knock { return Self.amber.opacity(0.3) }
+        return Self.gray
+    }
+
+    private var ring: some View {
+        ZStack {
+            Circle().strokeBorder(ringColor, lineWidth: 1)
+                .opacity(dashed ? 0 : 1)
+            Circle().strokeBorder(ringColor, style: StrokeStyle(lineWidth: 1, dash: [1.5, 2]))
+                .opacity(dashed ? 1 : 0)
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: dashed)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: state)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: needsInput)
+    }
+
+    private var satellitePoint: CGPoint {
+        let a = spin * .pi / 180
+        return CGPoint(x: Self.center.x + Self.radius * cos(a),
+                       y: Self.center.y + Self.radius * sin(a))
+    }
+
+    @ViewBuilder private var satellite: some View {
+        let active = state == .liveBusy
+        let color = active ? Self.emerald : (knock ? Self.amber : Self.gray)
+        let glowing = active || knock
+        if knock && !reduceMotion {
+            TimelineView(.animation) { ctx in
+                let p = 0.5 - 0.5 * cos(2 * .pi * (ctx.date.timeIntervalSinceReferenceDate / 1.3)
+                    .truncatingRemainder(dividingBy: 1))
+                dot(color, glowing: glowing).opacity(0.4 + 0.6 * p).position(satellitePoint)
+            }
+        } else {
+            dot(color, glowing: glowing).position(satellitePoint).opacity(satelliteOpacity)
+        }
+    }
+
+    private func dot(_ color: Color, glowing: Bool) -> some View {
+        Circle()
+            .fill(color)
+            .frame(width: 4, height: 4)
+            .shadow(color: glowing ? color.opacity(0.7) : .clear, radius: glowing ? 3 : 0)
+    }
+
+    private func configureForAppear() {
+        switch state {
+        case .liveBusy:  spin = reduceMotion ? 270 : Self.park; satelliteOpacity = 1; dashed = false
+        case .liveIdle:  spin = Self.park; satelliteOpacity = 1; dashed = false
+        case .cold:      satelliteOpacity = 0; dashed = true
+        }
+    }
+
+    /// Continuous, linear accumulation while busy; frozen otherwise (so a resume picks
+    /// up from the parked angle with no jump).
+    private func advance(_ now: Date) {
+        guard state == .liveBusy, !reduceMotion else { lastTick = nil; return }
+        if let last = lastTick { spin += Self.degPerSec * now.timeIntervalSince(last) }
+        lastTick = now
+    }
+
+    private func transition(to new: SessionState) {
+        switch new {
+        case .liveBusy:
+            run(.easeOut(duration: 0.25)) { satelliteOpacity = 1; dashed = false }
+        case .liveIdle:
+            run(.easeOut(duration: 0.25)) { satelliteOpacity = 1; dashed = false }
+            if reduceMotion { spin = Self.park }
+            else { run(.easeOut(duration: 0.3)) { spin = nextPark(from: spin) } }
+        case .cold:
+            run(.easeOut(duration: 0.4)) { satelliteOpacity = 0 }
+            let delay = reduceMotion ? 0 : 0.4
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                run(.easeInOut(duration: 0.2)) { dashed = true }
+            }
+        }
+    }
+
+    /// Smallest forward angle ≥ `s` that lands the satellite back at the 9-o'clock park.
+    private func nextPark(from s: Double) -> Double {
+        let delta = ((Self.park - s).truncatingRemainder(dividingBy: 360) + 360)
+            .truncatingRemainder(dividingBy: 360)
+        return s + delta
+    }
+
+    private func run(_ animation: Animation, _ body: () -> Void) {
+        if reduceMotion {
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t, body)
+        } else {
+            withAnimation(animation, body)
         }
     }
 }
