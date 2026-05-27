@@ -208,6 +208,11 @@ private struct SessionRow: View {
 /// that's waiting on the user (`needsInput`) parks in amber and *knocks* (pulses).
 /// Transitions glide/fade rather than snap. Reduce-motion parks busy at the top and
 /// holds the knock steady.
+///
+/// Busy rotation is a pure function of one shared wall clock, so every running session's
+/// orbit holds the same phase — the synced field reads as one calm hum (common fate),
+/// letting the lone amber knock break from it and grab the eye. A newly busy orbit snaps
+/// straight into that shared phase rather than starting its own.
 private struct OrbitIndicator: View {
     let state: SessionState
     var needsInput: Bool = false
@@ -220,10 +225,15 @@ private struct OrbitIndicator: View {
     private static let park: Double = 180          // 9 o'clock, in degrees
     private static let degPerSec = 360.0 / 2.5     // one revolution / 2.5s
 
-    @State private var spin: Double = park          // satellite angle (deg, accumulates)
+    @State private var spin: Double = park          // satellite angle (deg)
     @State private var satelliteOpacity: Double = 1
     @State private var dashed = false               // ring style; flips after the dead fade
-    @State private var lastTick: Date?
+
+    /// Busy angle as a pure function of absolute time — identical across every orbit, so
+    /// they share one phase instead of each drifting from its own appear time.
+    private static func spin(at date: Date) -> Double {
+        park + (date.timeIntervalSinceReferenceDate * degPerSec).truncatingRemainder(dividingBy: 360)
+    }
 
     private var reduceMotion: Bool {
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -292,18 +302,17 @@ private struct OrbitIndicator: View {
 
     private func configureForAppear() {
         switch state {
-        case .liveBusy:  spin = reduceMotion ? 270 : Self.park; satelliteOpacity = 1; dashed = false
+        case .liveBusy:  spin = reduceMotion ? 270 : Self.spin(at: Date()); satelliteOpacity = 1; dashed = false
         case .liveIdle:  spin = Self.park; satelliteOpacity = 1; dashed = false
         case .cold:      satelliteOpacity = 0; dashed = true
         }
     }
 
-    /// Continuous, linear accumulation while busy; frozen otherwise (so a resume picks
-    /// up from the parked angle with no jump).
+    /// Track the shared clock while busy; frozen otherwise (so an idle row holds its
+    /// eased-to-park angle).
     private func advance(_ now: Date) {
-        guard state == .liveBusy, !reduceMotion else { lastTick = nil; return }
-        if let last = lastTick { spin += Self.degPerSec * now.timeIntervalSince(last) }
-        lastTick = now
+        guard state == .liveBusy, !reduceMotion else { return }
+        spin = Self.spin(at: now)
     }
 
     private func transition(to new: SessionState) {
