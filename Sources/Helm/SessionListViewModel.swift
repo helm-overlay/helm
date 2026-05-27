@@ -1,0 +1,68 @@
+import SwiftUI
+import HelmCore
+
+struct DisplayGroup: Identifiable {
+    let project: String
+    let sessions: [ChatSession]
+    var id: String { project }
+}
+
+@MainActor
+final class SessionListViewModel: ObservableObject {
+    @Published private(set) var groups: [DisplayGroup] = []
+    @Published private(set) var query: String = ""
+    @Published var selection: String?          // sessionId
+
+    private let store = SessionStore()
+    private var all: [(project: String, sessions: [ChatSession])] = []
+
+    var liveCount: Int { all.flatMap(\.sessions).filter(\.isLive).count }
+    var totalCount: Int { all.flatMap(\.sessions).count }
+
+    /// Flattened, in display order — the navigation order for arrow keys.
+    private var visibleFlat: [ChatSession] { groups.flatMap(\.sessions) }
+
+    var selectedSession: ChatSession? {
+        visibleFlat.first { $0.sessionId == selection }
+    }
+
+    func reload() {
+        all = store.grouped()
+        applyFilter()
+    }
+
+    // MARK: Query (typeahead)
+
+    func appendQuery(_ s: String) { query += s; applyFilter() }
+    func backspaceQuery() { if !query.isEmpty { query.removeLast(); applyFilter() } }
+
+    // MARK: Selection
+
+    func move(by delta: Int) {
+        let flat = visibleFlat
+        guard !flat.isEmpty else { selection = nil; return }
+        let cur = flat.firstIndex { $0.sessionId == selection } ?? -1
+        let next = max(0, min(flat.count - 1, cur + delta))
+        selection = flat[next].sessionId
+    }
+
+    // MARK: Filtering
+
+    private func applyFilter() {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        let filtered: [DisplayGroup] = all.compactMap { group in
+            guard !q.isEmpty else { return DisplayGroup(project: group.project, sessions: group.sessions) }
+            let hits = group.sessions.filter {
+                $0.label.lowercased().contains(q) || group.project.lowercased().contains(q)
+            }
+            return hits.isEmpty ? nil : DisplayGroup(project: group.project, sessions: hits)
+        }
+        groups = filtered
+
+        // Keep a valid selection: preserve if still visible, else first row.
+        let flat = filtered.flatMap(\.sessions)
+        if selection == nil || !flat.contains(where: { $0.sessionId == selection }) {
+            selection = flat.first?.sessionId
+        }
+    }
+}

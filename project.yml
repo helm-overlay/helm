@@ -9,6 +9,24 @@ settings:
     SWIFT_VERSION: "5.0"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
 targets:
+  Helm:
+    type: application
+    platform: macOS
+    info:
+      path: Sources/Helm/Info.plist
+      properties:
+        LSUIElement: true
+        CFBundleName: Helm
+        NSAppleEventsUsageDescription: "Helm opens your selected Claude chat in iTerm2."
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.eshaanshah.helm.app
+        ENABLE_HARDENED_RUNTIME: "YES"
+    sources:
+      - path: Sources/Helm
+    dependencies:
+      - target: HelmCore
+
   HelmCore:
     type: library.static
     platform: macOS

@@ -56,5 +56,5 @@ public struct HistoryRecord: Equatable {
 }
 
 extension String {
-    var nonEmpty: String? { isEmpty ? nil : self }
+    public var nonEmpty: String? { isEmpty ? nil : self }
 }
