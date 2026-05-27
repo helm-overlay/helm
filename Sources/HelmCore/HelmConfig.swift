@@ -32,7 +32,7 @@ public struct HelmConfig: Equatable {
     /// 0 or negative disables the cutoff (show everything).
     public var hideOlderThanDays: Int
 
-    public init(terminal: TerminalKind = .default, hideOlderThanDays: Int = 7) {
+    public init(terminal: TerminalKind = .default, hideOlderThanDays: Int = 1) {
         self.terminal = terminal
         self.hideOlderThanDays = hideOlderThanDays
     }

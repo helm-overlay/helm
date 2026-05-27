@@ -4,6 +4,8 @@ import HelmCore
 struct DisplayGroup: Identifiable {
     let project: String
     let sessions: [ChatSession]
+    let hiddenCount: Int        // collapsed cold rows; >0 → render the "+N older" tail
+    let expanded: Bool          // tail is open → render the "show less" tail
     var id: String { project }
 }
 
@@ -18,6 +20,11 @@ final class SessionListViewModel: ObservableObject {
     private var all: [(project: String, sessions: [ChatSession])] = []
     private var ticker: Timer?
     private var hideOlderThan: TimeInterval = HelmConfig.load().hideOlderThan
+    private var expanded: Set<String> = []          // projects whose collapsed tail is open
+
+    /// Hard cap on rows shown per project in the default view; the rest collapse into a
+    /// "+N older" tail (still reachable by search or by expanding the project).
+    private let perProjectCap = 5
 
     /// Advance the age clock every 30s while the panel is open (no per-second churn).
     func startTicking() {
@@ -70,6 +77,12 @@ final class SessionListViewModel: ObservableObject {
     func appendQuery(_ s: String) { query += s; applyFilter() }
     func backspaceQuery() { if !query.isEmpty { query.removeLast(); applyFilter() } }
 
+    /// Open/close a project's collapsed "+N older" tail.
+    func toggleExpanded(_ project: String) {
+        if expanded.contains(project) { expanded.remove(project) } else { expanded.insert(project) }
+        applyFilter()
+    }
+
     // MARK: Selection
 
     func move(by delta: Int) {
@@ -88,16 +101,34 @@ final class SessionListViewModel: ObservableObject {
         let clock = now
 
         let filtered: [DisplayGroup] = all.compactMap { group in
-            let rows = group.sessions.filter { s in
-                if searching {
-                    // Search spans everything, including old sessions.
-                    return s.label.lowercased().contains(q) || group.project.lowercased().contains(q)
-                }
-                // Default view: hide old sessions — but never a live one.
-                if s.isLive { return true }
-                return !SessionStore.isOlderThan(hideOlderThan, lastActive: s.lastActive, now: clock)
+            // While searching, span everything — every project (incl. legacy "Other"),
+            // no recency cutoff, no collapse — and rank by fuzzy match across all fields.
+            if searching {
+                let rows = group.sessions.filter { SessionStore.matches($0, query: q) }
+                return rows.isEmpty ? nil
+                    : DisplayGroup(project: group.project, sessions: rows, hiddenCount: 0, expanded: false)
             }
-            return rows.isEmpty ? nil : DisplayGroup(project: group.project, sessions: rows)
+
+            // Default view is a switcher, not an archive:
+            // 1. Legacy "Other" is search-only — it never takes space in the default list.
+            if group.project == "Other" { return nil }
+            // 2. Recency cutoff, but a live row is never hidden.
+            let recent = group.sessions.filter { s in
+                s.isLive || !SessionStore.isOlderThan(hideOlderThan, lastActive: s.lastActive, now: clock)
+            }
+            guard !recent.isEmpty else { return nil }
+            // 3. Hard cap per project — show at most `perProjectCap` rows (live-first,
+            //    newest-first, as store.grouped() already sorts). The rest collapse behind
+            //    a "+N older" tail even when recent, and are still reachable via search.
+            let collapsible = recent.count > perProjectCap
+            let isOpen = expanded.contains(group.project)
+            if !collapsible || isOpen {
+                return DisplayGroup(project: group.project, sessions: recent,
+                                    hiddenCount: 0, expanded: collapsible && isOpen)
+            }
+            let shown = Array(recent.prefix(perProjectCap))
+            return DisplayGroup(project: group.project, sessions: shown,
+                                hiddenCount: recent.count - shown.count, expanded: false)
         }
         groups = filtered
 

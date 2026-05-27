@@ -31,9 +31,9 @@ final class HelmConfigTests: XCTestCase {
         XCTAssertEqual(cfg.hideOlderThan, 14 * 86_400)
     }
 
-    func testHideOlderThanDefaultsToOneWeek() {
-        XCTAssertEqual(HelmConfig().hideOlderThanDays, 7)
-        XCTAssertEqual(HelmConfig().hideOlderThan, 7 * 86_400)
+    func testHideOlderThanDefaultsToOneDay() {
+        XCTAssertEqual(HelmConfig().hideOlderThanDays, 1)
+        XCTAssertEqual(HelmConfig().hideOlderThan, 86_400)
     }
 
     func testHideOlderThanDisabledWhenNonPositive() {

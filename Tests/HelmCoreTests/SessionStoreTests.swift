@@ -116,4 +116,25 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(groups.map(\.project), ["alpha", "Other"])     // Other last
         XCTAssertEqual(groups[0].sessions.map(\.label), ["live-old", "cold-new"]) // live first
     }
+
+    // MARK: search
+
+    func testFuzzyMatchesSubsequenceNotJustSubstring() {
+        XCTAssertTrue(SessionStore.fuzzy("mobile-poll cleanup", "mpc"))   // out-of-order chars, in sequence
+        XCTAssertTrue(SessionStore.fuzzy("MOBPC-1234", "mob"))            // case-insensitive
+        XCTAssertFalse(SessionStore.fuzzy("alpha", "az"))                 // 'z' missing
+        XCTAssertTrue(SessionStore.fuzzy("anything", ""))                // empty query matches
+    }
+
+    func testMatchesSpansLabelBranchAndCwd() {
+        let s = ChatSession(sessionId: "1", cwd: "/Users/me/projects/helm/Sources",
+                            project: "helm", label: "fix dispatch",
+                            state: .cold, kind: nil, pid: nil, lastActive: Date(),
+                            branch: "helm-bootstrap")
+        XCTAssertTrue(SessionStore.matches(s, query: "dispatch"))    // label
+        XCTAssertTrue(SessionStore.matches(s, query: "helm"))        // project
+        XCTAssertTrue(SessionStore.matches(s, query: "bootstrap"))   // branch
+        XCTAssertTrue(SessionStore.matches(s, query: "sources"))     // cwd
+        XCTAssertFalse(SessionStore.matches(s, query: "android"))
+    }
 }

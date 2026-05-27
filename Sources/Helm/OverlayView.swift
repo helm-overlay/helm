@@ -54,6 +54,13 @@ struct OverlayView: View {
                                     .contentShape(Rectangle())
                                     .onTapGesture { onPick(session) }
                             }
+                            if group.hiddenCount > 0 {
+                                CollapseTail(label: "+\(group.hiddenCount) older")
+                                    .onTapGesture { model.toggleExpanded(group.project) }
+                            } else if group.expanded {
+                                CollapseTail(label: "show less")
+                                    .onTapGesture { model.toggleExpanded(group.project) }
+                            }
                         } header: {
                             GroupHeader(project: group.project)
                         }
@@ -105,6 +112,21 @@ private struct GroupHeader: View {
             .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.ultraThinMaterial)
+    }
+}
+
+private struct CollapseTail: View {
+    let label: String
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "ellipsis").font(.system(size: 10, weight: .bold))
+            Text(label).font(.system(size: 12, weight: .medium))
+        }
+        .foregroundStyle(.tertiary)
+        .padding(.horizontal, 12).padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .padding(.horizontal, 8)
     }
 }
 

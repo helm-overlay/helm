@@ -57,7 +57,7 @@ public struct SessionStore {
                 sessionId: h.sessionId, cwd: h.cwd ?? "",
                 project: Self.project(forCwd: h.cwd ?? "", home: home),
                 label: label, state: state, kind: l?.kind, pid: l?.pid,
-                lastActive: h.lastActive))
+                lastActive: h.lastActive, branch: h.gitBranch))
         }
 
         // Live sessions with no transcript yet (rare): surface them too.
@@ -102,6 +102,28 @@ public struct SessionStore {
     /// Whether a session is past the "hide old sessions" cutoff (cutoff <= 0 disables).
     public static func isOlderThan(_ cutoff: TimeInterval, lastActive: Date, now: Date) -> Bool {
         cutoff > 0 && now.timeIntervalSince(lastActive) > cutoff
+    }
+
+    /// Search-first matching: a session matches a query if the query is a subsequence
+    /// (fzf-style fuzzy) of its label, project, branch, or cwd. Query assumed lowercased.
+    public static func matches(_ s: ChatSession, query q: String) -> Bool {
+        guard !q.isEmpty else { return true }
+        for field in [s.label, s.project, s.branch ?? "", s.cwd] where fuzzy(field, q) {
+            return true
+        }
+        return false
+    }
+
+    /// `needle`'s characters appear in order within `haystack` (not necessarily adjacent).
+    static func fuzzy(_ haystack: String, _ needle: String) -> Bool {
+        guard !needle.isEmpty else { return true }
+        let n = Array(needle)
+        var i = 0
+        for ch in haystack.lowercased() where ch == n[i] {
+            i += 1
+            if i == n.count { return true }
+        }
+        return false
     }
 
     static func state(forStatus status: String?, isLive: Bool) -> SessionState {

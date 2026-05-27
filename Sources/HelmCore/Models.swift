@@ -13,6 +13,7 @@ public struct ChatSession: Identifiable, Equatable {
     public let cwd: String
     public let project: String       // grouping key (~/projects/<name>, else "Other")
     public let label: String
+    public let branch: String?       // git branch, for search matching only
     public let state: SessionState
     public let kind: String?         // "interactive" / "bg", live rows only
     public let pid: Int32?           // live rows only
@@ -22,9 +23,10 @@ public struct ChatSession: Identifiable, Equatable {
     public var isLive: Bool { state != .cold }
 
     public init(sessionId: String, cwd: String, project: String, label: String,
-                state: SessionState, kind: String?, pid: Int32?, lastActive: Date) {
+                state: SessionState, kind: String?, pid: Int32?, lastActive: Date,
+                branch: String? = nil) {
         self.sessionId = sessionId; self.cwd = cwd; self.project = project
-        self.label = label; self.state = state; self.kind = kind
+        self.label = label; self.branch = branch; self.state = state; self.kind = kind
         self.pid = pid; self.lastActive = lastActive
     }
 }
