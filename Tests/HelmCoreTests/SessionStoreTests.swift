@@ -66,6 +66,71 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(SessionStore.state(forStatus: "busy", isLive: false), .cold)
     }
 
+    // MARK: idle classification (needs-input vs done)
+
+    private func asst(_ content: String) -> String {
+        #"{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"\#(content)"}]}}"#
+    }
+
+    func testClassifyDoneWhenProseEndsDeclaratively() {
+        let tail = asst("All set — the build passes and tests are green.")
+        XCTAssertEqual(SessionStore.classifyIdleTail(tail), .done)
+    }
+
+    func testClassifyNeedsInputWhenLastLineIsAQuestion() {
+        let tail = asst("Which option do you want?")
+        XCTAssertEqual(SessionStore.classifyIdleTail(tail), .needsInput)
+    }
+
+    func testClassifyQuestionOnFinalLineOfMultiline() {
+        // In real JSONL, in-message newlines are escaped (\n) and stay on one line;
+        // only the LAST line of the decoded text is inspected for the trailing "?".
+        let tail = asst(#"Here are the tradeoffs.\nWhich one should I build?"#)
+        XCTAssertEqual(SessionStore.classifyIdleTail(tail), .needsInput)
+    }
+
+    func testClassifyDoneWhenQuestionIsNotOnTheLastLine() {
+        // Deliberate low recall: a question buried above a declarative close reads as done.
+        let tail = asst(#"Should I proceed?\nI'll wait for your go-ahead before touching it."#)
+        XCTAssertEqual(SessionStore.classifyIdleTail(tail), .done)
+    }
+
+    func testClassifyNeedsInputOnUnansweredToolUse() {
+        // Assistant asked via a tool and no tool_result followed → blocked on the user.
+        let tail = #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"AskUserQuestion"}]}}"#
+        XCTAssertEqual(SessionStore.classifyIdleTail(tail), .needsInput)
+    }
+
+    func testClassifyDoneWhenToolUseHasResult() {
+        let tail = [
+            #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"Bash"}]}}"#,
+            #"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1"}]}}"#,
+            asst("Done — ran it and cleaned up."),
+        ].joined(separator: "\n")
+        XCTAssertEqual(SessionStore.classifyIdleTail(tail), .done)
+    }
+
+    func testClassifyIgnoresTrailingMetadataAndPartialFirstLine() {
+        let tail = [
+            #"e":"text","text":"truncated mid-record from the tail read"}]}}"#,   // partial → skipped
+            asst("Want me to wire it up?"),
+            #"{"type":"ai-title","title":"something"}"#,                           // metadata → skipped
+            #"{"type":"permission-mode","mode":"default"}"#,
+        ].joined(separator: "\n")
+        XCTAssertEqual(SessionStore.classifyIdleTail(tail), .needsInput)
+    }
+
+    func testClassifyDoneWhenNoAssistantMessage() {
+        XCTAssertEqual(SessionStore.classifyIdleTail(#"{"type":"user","message":{"role":"user","content":"hi"}}"#), .done)
+    }
+
+    func testIdleReasonFromHookState() {
+        XCTAssertEqual(SessionStore.idleReason(fromState: "needs_input"), .needsInput)
+        XCTAssertEqual(SessionStore.idleReason(fromState: "done"), .done)
+        XCTAssertNil(SessionStore.idleReason(fromState: "needsInput"))   // not the hook's spelling
+        XCTAssertNil(SessionStore.idleReason(fromState: nil))
+    }
+
     // MARK: join
 
     func testMergeJoinsOnSessionId() {

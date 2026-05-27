@@ -2,9 +2,19 @@ import Foundation
 
 /// Display state of a chat row, derived from the live registry + liveness check.
 public enum SessionState: String, Equatable {
-    case liveBusy   // alive process, status == busy   → 🟢
-    case liveIdle   // alive process, status == idle   → ⚪
-    case cold       // no live process; resumable      → ·
+    case liveBusy   // alive process, status == busy   → orbiting satellite
+    case liveIdle   // alive process, status == idle   → parked satellite
+    case cold       // no live process; resumable      → dashed ring
+}
+
+/// Why a `liveIdle` session stopped — distinguishes "waiting on me" from "done".
+/// Derived from the transcript tail (see `SessionStore.classifyIdleTail`). Structural
+/// signals (an unanswered question/permission) are high-confidence; the trailing-"?"
+/// check is high-precision but low-recall, so `done` is "nothing pending that we can
+/// detect", not a guarantee of completion.
+public enum IdleReason: String, Equatable {
+    case needsInput   // ended awaiting the user (decision / permission / a question)
+    case done         // concluded with nothing detectably pending
 }
 
 /// One row in the overlay: a Claude session, live or historical, joined on `sessionId`.
@@ -15,19 +25,35 @@ public struct ChatSession: Identifiable, Equatable {
     public let label: String
     public let branch: String?       // git branch, for search matching only
     public let state: SessionState
+    public let idleReason: IdleReason?   // non-nil only when state == .liveIdle
     public let kind: String?         // "interactive" / "bg", live rows only
     public let pid: Int32?           // live rows only
     public let lastActive: Date      // transcript file mtime (history) or now (live-only)
 
     public var id: String { sessionId }
     public var isLive: Bool { state != .cold }
+    public var needsInput: Bool { state == .liveIdle && idleReason == .needsInput }
 
     public init(sessionId: String, cwd: String, project: String, label: String,
                 state: SessionState, kind: String?, pid: Int32?, lastActive: Date,
-                branch: String? = nil) {
+                branch: String? = nil, idleReason: IdleReason? = nil) {
         self.sessionId = sessionId; self.cwd = cwd; self.project = project
         self.label = label; self.branch = branch; self.state = state; self.kind = kind
-        self.pid = pid; self.lastActive = lastActive
+        self.pid = pid; self.lastActive = lastActive; self.idleReason = idleReason
+    }
+
+    public func with(idleReason: IdleReason?) -> ChatSession {
+        ChatSession(sessionId: sessionId, cwd: cwd, project: project, label: label,
+                    state: state, kind: kind, pid: pid, lastActive: lastActive,
+                    branch: branch, idleReason: idleReason)
+    }
+
+    /// A dead (cold) copy — for optimistic UI after we kill the process ourselves,
+    /// before the next filesystem poll confirms it. Stays resumable from history.
+    public func markedDead() -> ChatSession {
+        ChatSession(sessionId: sessionId, cwd: cwd, project: project, label: label,
+                    state: .cold, kind: nil, pid: nil, lastActive: lastActive,
+                    branch: branch, idleReason: nil)
     }
 }
 

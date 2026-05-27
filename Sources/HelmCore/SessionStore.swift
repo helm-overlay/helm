@@ -19,9 +19,19 @@ public struct SessionStore {
 
     // MARK: Public API
 
-    /// Full merged list, ready to display.
+    /// Full merged list, ready to display. Idle rows get a needs-input/done reason from
+    /// the Stop-hook's state file when it's at least as fresh as the transcript;
+    /// otherwise we fall back to the in-process structural classify of the tail. Only
+    /// idle rows pay any of this IO.
     public func load() -> [ChatSession] {
-        merge(live: readLive(), history: readHistory())
+        merge(live: readLive(), history: readHistory()).map { s in
+            guard s.state == .liveIdle else { return s }
+            if let reason = readStateFile(sessionId: s.sessionId) {   // hook's verdict wins
+                return s.with(idleReason: reason)
+            }
+            guard let url = locateTranscript(s.sessionId), let tail = readTail(url) else { return s }
+            return s.with(idleReason: Self.classifyIdleTail(tail))
+        }
     }
 
     /// Grouped + sorted for display: projects alphabetical, "Other" last; within a
@@ -131,6 +141,66 @@ public struct SessionStore {
         return status == "busy" ? .liveBusy : .liveIdle
     }
 
+    /// Classify an idle session's transcript tail into needs-input vs done. Pure, so it
+    /// runs against synthetic JSONL in tests. Rules, in order:
+    ///   1. The last assistant turn left a `tool_use` with no matching `tool_result`
+    ///      after it (e.g. an unanswered AskUserQuestion / ExitPlanMode) → needsInput.
+    ///   2. It ended on prose whose last line is a question (trailing "?") → needsInput.
+    ///   3. Otherwise → done.
+    /// High precision, deliberately low recall: a turn that asks in prose without a
+    /// trailing "?" reads as `done` rather than risk a false "needs you". (An LLM pass
+    /// over the same tail would lift recall — that's the planned next layer.)
+    public static func classifyIdleTail(_ tail: String) -> IdleReason {
+        var msgs: [ClassMsg] = []
+        for line in tail.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard let data = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let message = obj["message"] as? [String: Any] else { continue }
+            let role = message["role"] as? String
+            var toolUseIds: [String] = [], resultIds: [String] = [], lastText: String?
+            if let blocks = message["content"] as? [[String: Any]] {
+                for b in blocks {
+                    switch b["type"] as? String {
+                    case "tool_use":    if let id = b["id"] as? String { toolUseIds.append(id) }
+                    case "tool_result": if let id = b["tool_use_id"] as? String { resultIds.append(id) }
+                    case "text":        if let t = b["text"] as? String { lastText = t }
+                    default: break
+                    }
+                }
+            } else if let s = message["content"] as? String {
+                lastText = s
+            }
+            msgs.append(ClassMsg(role: role, toolUseIds: toolUseIds, resultIds: resultIds, lastText: lastText))
+        }
+
+        return classifyAssistantMessages(msgs)
+    }
+
+    /// The Stop hook writes `{"reason":"needs_input"|"done", ...}`; map that to IdleReason.
+    public static func idleReason(fromState raw: String?) -> IdleReason? {
+        switch raw {
+        case "needs_input": return .needsInput
+        case "done":        return .done
+        default:            return nil
+        }
+    }
+
+    private struct ClassMsg { let role: String?; let toolUseIds: [String]; let resultIds: [String]; let lastText: String? }
+
+    private static func classifyAssistantMessages(_ msgs: [ClassMsg]) -> IdleReason {
+        guard let li = msgs.lastIndex(where: { $0.role == "assistant" }) else { return .done }
+        let last = msgs[li]
+
+        let resultsAfter = Set(msgs[(li + 1)...].flatMap(\.resultIds))
+        if last.toolUseIds.contains(where: { !resultsAfter.contains($0) }) { return .needsInput }
+
+        let endsOnQuestion = last.lastText?
+            .split(whereSeparator: \.isNewline).last?
+            .trimmingCharacters(in: .whitespaces)
+            .hasSuffix("?") ?? false
+        return endsOnQuestion ? .needsInput : .done
+    }
+
     static func group(_ sessions: [ChatSession]) -> [(project: String, sessions: [ChatSession])] {
         let byProject = Dictionary(grouping: sessions, by: \.project)
         let sortRows: ([ChatSession]) -> [ChatSession] = { rows in
@@ -170,6 +240,25 @@ public struct SessionStore {
                                   kind: j.kind, status: j.status, name: j.name))
         }
         return out
+    }
+
+    /// SIGTERM a session's process — the "idle → dead" half of the kill action.
+    public static func terminate(_ pid: Int32) {
+        #if canImport(Darwin)
+        _ = kill(pid, SIGTERM)
+        #endif
+    }
+
+    /// The path Helm and the Stop hook share for a session's classification.
+    static func stateFileURL(_ sessionId: String, home: String) -> URL {
+        URL(fileURLWithPath: home).appendingPathComponent(".helm/state/\(sessionId).json")
+    }
+
+    /// Delete a session's state file ourselves. Needed after a self-initiated kill: the
+    /// process dies before Claude Code can run its `SessionEnd` cleanup hook, and the
+    /// `sessionId` (hence the filename) is reused on `claude --resume`.
+    public static func clearState(_ sessionId: String, home: String = NSHomeDirectory()) {
+        try? FileManager.default.removeItem(at: stateFileURL(sessionId, home: home))
     }
 
     /// `kill(pid, 0)`: 0 == alive; EPERM == alive but not ours; ESRCH == dead.
@@ -238,6 +327,43 @@ public struct SessionStore {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         guard let data = try? handle.read(upToCount: Self.headBytes) else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// The Stop hook's classification at ~/.helm/state/<sessionId>.json. Authoritative for
+    /// idle rows: the registry already gates on real-time idle/busy, and the hook rewrites
+    /// this on every turn end, so a present file reflects the current idle turn. (No mtime
+    /// gate — transcripts get trailing metadata writes that would falsely look "newer".)
+    private func readStateFile(sessionId: String) -> IdleReason? {
+        let url = Self.stateFileURL(sessionId, home: home)
+        guard let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return Self.idleReason(fromState: obj["reason"] as? String)
+    }
+
+    /// Find a session's transcript by filename (== sessionId) across project dirs.
+    private func locateTranscript(_ sessionId: String) -> URL? {
+        let dir = claudeDir.appendingPathComponent("projects")
+        guard let projectDirs = try? FileManager.default.contentsOfDirectory(at: dir,
+            includingPropertiesForKeys: nil) else { return nil }
+        for pdir in projectDirs {
+            let url = pdir.appendingPathComponent("\(sessionId).jsonl")
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+        return nil
+    }
+
+    private static let tailBytes: UInt64 = 32 * 1024
+
+    /// Last `tailBytes` of the transcript. The leading line is usually mid-record and
+    /// fails to parse (harmless — the classifier just skips it).
+    private func readTail(_ url: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        let end = (try? handle.seekToEnd()) ?? 0
+        try? handle.seek(toOffset: end > Self.tailBytes ? end - Self.tailBytes : 0)
+        guard let data = try? handle.readToEnd() else { return nil }
         return String(decoding: data, as: UTF8.self)
     }
 }
