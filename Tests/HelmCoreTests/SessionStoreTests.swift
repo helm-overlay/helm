@@ -14,6 +14,20 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(SessionStore.project(forCwd: "", home: home), "Other")
     }
 
+    // MARK: hook-induced filtering ("my kind of threads only")
+
+    func testUserThreadVsAutomation() {
+        XCTAssertTrue(SessionStore.isUserThread(entrypoint: "cli"))
+        XCTAssertTrue(SessionStore.isUserThread(entrypoint: nil))     // old transcripts: keep
+        XCTAssertFalse(SessionStore.isUserThread(entrypoint: "sdk-py"))   // security-guidance hook
+        XCTAssertFalse(SessionStore.isUserThread(entrypoint: "sdk-ts"))
+    }
+
+    func testSubagentTranscriptDetection() {
+        XCTAssertTrue(SessionStore.isSubagentTranscript(filename: "agent-afcb69a539763eff5.jsonl"))
+        XCTAssertFalse(SessionStore.isSubagentTranscript(filename: "3f27ba72-739d-41a8-8f47.jsonl"))
+    }
+
     // MARK: state derivation
 
     func testStateDerivation() {

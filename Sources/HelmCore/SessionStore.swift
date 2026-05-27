@@ -72,6 +72,18 @@ public struct SessionStore {
         return out
     }
 
+    /// "My kind of thread": a session the user started interactively, not one a hook or
+    /// the agent SDK induced. CLI entrypoint (or unstamped, for older transcripts) = mine.
+    public static func isUserThread(entrypoint: String?) -> Bool {
+        entrypoint == nil || entrypoint == "cli"
+    }
+
+    /// Task/subagent transcripts are written as `agent-<hash>.jsonl` (sidechain-only,
+    /// not resumable) — never a user thread.
+    public static func isSubagentTranscript(filename: String) -> Bool {
+        filename.hasPrefix("agent-")
+    }
+
     static func state(forStatus status: String?, isLive: Bool) -> SessionState {
         guard isLive else { return .cold }
         return status == "busy" ? .liveBusy : .liveIdle
@@ -97,10 +109,11 @@ public struct SessionStore {
 
     private struct LiveJSON: Decodable {
         let pid: Int32; let sessionId: String
-        let kind: String?; let status: String?; let name: String?
+        let kind: String?; let status: String?; let name: String?; let entrypoint: String?
     }
 
-    /// Read live registry, dropping files whose PID is no longer alive (stale).
+    /// Read live registry, dropping files whose PID is no longer alive (stale) and any
+    /// hook/SDK-induced sessions (keep only user threads).
     public func readLive() -> [LiveRecord] {
         let dir = claudeDir.appendingPathComponent("sessions")
         let files = (try? FileManager.default.contentsOfDirectory(at: dir,
@@ -109,6 +122,7 @@ public struct SessionStore {
         for f in files where f.pathExtension == "json" {
             guard let data = try? Data(contentsOf: f),
                   let j = try? JSONDecoder().decode(LiveJSON.self, from: data),
+                  Self.isUserThread(entrypoint: j.entrypoint),
                   Self.isAlive(j.pid) else { continue }
             out.append(LiveRecord(pid: j.pid, sessionId: j.sessionId,
                                   kind: j.kind, status: j.status, name: j.name))
@@ -136,7 +150,10 @@ public struct SessionStore {
             let files = (try? FileManager.default.contentsOfDirectory(at: pdir,
                 includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
             for f in files where f.pathExtension == "jsonl" {
-                out.append(readTranscript(f))
+                if Self.isSubagentTranscript(filename: f.lastPathComponent) { continue }
+                let rec = readTranscript(f)
+                guard Self.isUserThread(entrypoint: rec.entrypoint) else { continue }
+                out.append(rec)
             }
         }
         return out
@@ -151,7 +168,7 @@ public struct SessionStore {
         let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
             .contentModificationDate ?? .distantPast
 
-        var cwd: String?, gitBranch: String?, aiTitle: String?
+        var cwd: String?, gitBranch: String?, aiTitle: String?, entrypoint: String?
         // A truncated final line (from the head read) simply fails to parse and is skipped.
         if let content = readHead(url) {
             for line in content.split(separator: "\n", omittingEmptySubsequences: true) {
@@ -165,11 +182,14 @@ public struct SessionStore {
                 if aiTitle == nil, let t = obj["aiTitle"] as? String, !t.isEmpty {
                     aiTitle = t
                 }
-                if cwd != nil && aiTitle != nil { break }   // stop early
+                if entrypoint == nil, let e = obj["entrypoint"] as? String, !e.isEmpty {
+                    entrypoint = e
+                }
+                if cwd != nil && aiTitle != nil && entrypoint != nil { break }   // stop early
             }
         }
         return HistoryRecord(sessionId: sid, cwd: cwd, gitBranch: gitBranch,
-                             aiTitle: aiTitle, lastActive: mtime)
+                             aiTitle: aiTitle, entrypoint: entrypoint, lastActive: mtime)
     }
 
     private func readHead(_ url: URL) -> String? {

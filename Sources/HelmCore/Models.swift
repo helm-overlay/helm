@@ -48,10 +48,12 @@ public struct HistoryRecord: Equatable {
     public let cwd: String?
     public let gitBranch: String?
     public let aiTitle: String?
+    public let entrypoint: String?   // "cli" = user-started; "sdk-py" etc = automation
     public let lastActive: Date
-    public init(sessionId: String, cwd: String?, gitBranch: String?, aiTitle: String?, lastActive: Date) {
+    public init(sessionId: String, cwd: String?, gitBranch: String?, aiTitle: String?,
+                entrypoint: String? = nil, lastActive: Date) {
         self.sessionId = sessionId; self.cwd = cwd; self.gitBranch = gitBranch
-        self.aiTitle = aiTitle; self.lastActive = lastActive
+        self.aiTitle = aiTitle; self.entrypoint = entrypoint; self.lastActive = lastActive
     }
 }
 
