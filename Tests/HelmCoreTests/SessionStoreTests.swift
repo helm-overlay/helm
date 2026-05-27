@@ -28,6 +28,21 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertFalse(SessionStore.isSubagentTranscript(filename: "3f27ba72-739d-41a8-8f47.jsonl"))
     }
 
+    // MARK: age labels (<15m / <30m / <1h / Nh, floored)
+
+    func testAgeLabelBuckets() {
+        XCTAssertEqual(SessionStore.ageLabel(-100),        "<15m")   // future mtime → clamp
+        XCTAssertEqual(SessionStore.ageLabel(0),           "<15m")
+        XCTAssertEqual(SessionStore.ageLabel(14 * 60),     "<15m")
+        XCTAssertEqual(SessionStore.ageLabel(15 * 60),     "<30m")
+        XCTAssertEqual(SessionStore.ageLabel(29 * 60),     "<30m")
+        XCTAssertEqual(SessionStore.ageLabel(30 * 60),     "<1h")
+        XCTAssertEqual(SessionStore.ageLabel(59 * 60),     "<1h")
+        XCTAssertEqual(SessionStore.ageLabel(60 * 60),     "1h")
+        XCTAssertEqual(SessionStore.ageLabel((2 * 60 + 59) * 60), "2h")   // 2h59m → 2h
+        XCTAssertEqual(SessionStore.ageLabel(25 * 60 * 60), "25h")
+    }
+
     // MARK: state derivation
 
     func testStateDerivation() {

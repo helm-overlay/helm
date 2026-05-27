@@ -12,9 +12,25 @@ final class SessionListViewModel: ObservableObject {
     @Published private(set) var groups: [DisplayGroup] = []
     @Published private(set) var query: String = ""
     @Published var selection: String?          // sessionId
+    @Published private(set) var now: Date = Date()   // clock for age labels; ticks while visible
 
     private let store = SessionStore()
     private var all: [(project: String, sessions: [ChatSession])] = []
+    private var ticker: Timer?
+
+    /// Advance the age clock every 30s while the panel is open (no per-second churn).
+    func startTicking() {
+        now = Date()
+        ticker?.invalidate()
+        ticker = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.now = Date() }
+        }
+    }
+
+    func stopTicking() {
+        ticker?.invalidate()
+        ticker = nil
+    }
 
     var liveCount: Int { all.flatMap(\.sessions).filter(\.isLive).count }
     var totalCount: Int { all.flatMap(\.sessions).count }

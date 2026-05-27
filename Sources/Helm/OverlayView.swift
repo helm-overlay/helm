@@ -48,7 +48,8 @@ struct OverlayView: View {
                         Section {
                             ForEach(group.sessions) { session in
                                 SessionRow(session: session,
-                                           selected: session.sessionId == model.selection)
+                                           selected: session.sessionId == model.selection,
+                                           now: model.now)
                                     .id(session.sessionId)
                                     .contentShape(Rectangle())
                                     .onTapGesture { onPick(session) }
@@ -110,6 +111,7 @@ private struct GroupHeader: View {
 private struct SessionRow: View {
     let session: ChatSession
     let selected: Bool
+    let now: Date
 
     var body: some View {
         HStack(spacing: 10) {
@@ -124,8 +126,9 @@ private struct SessionRow: View {
                     .padding(.horizontal, 5).padding(.vertical, 1)
                     .background(.white.opacity(0.07), in: Capsule())
             }
-            Text(relativeTime).font(.system(size: 11)).foregroundStyle(.tertiary)
-                .frame(width: 64, alignment: .trailing)
+            Text(SessionStore.ageLabel(now.timeIntervalSince(session.lastActive)))
+                .font(.system(size: 11)).foregroundStyle(.tertiary)
+                .frame(width: 48, alignment: .trailing)
         }
         .padding(.horizontal, 12).padding(.vertical, 7)
         .background(selected ? Color.accentColor.opacity(0.28) : .clear,
@@ -139,11 +142,5 @@ private struct SessionRow: View {
         case .liveIdle: return .secondary
         case .cold:     return .clear
         }
-    }
-
-    private var relativeTime: String {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .abbreviated
-        return f.localizedString(for: session.lastActive, relativeTo: Date())
     }
 }

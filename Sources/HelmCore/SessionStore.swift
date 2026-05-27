@@ -84,6 +84,18 @@ public struct SessionStore {
         filename.hasPrefix("agent-")
     }
 
+    /// Coarse "time since last activity" label (no seconds/minutes precision):
+    /// `<15m`, `<30m`, `<1h`, then whole hours floored — 2h59m shows as `2h`.
+    public static func ageLabel(_ interval: TimeInterval) -> String {
+        let minutes = max(0, Int(interval / 60))
+        switch minutes {
+        case ..<15:  return "<15m"
+        case ..<30:  return "<30m"
+        case ..<60:  return "<1h"
+        default:     return "\(minutes / 60)h"
+        }
+    }
+
     static func state(forStatus status: String?, isLive: Bool) -> SessionState {
         guard isLive else { return .cold }
         return status == "busy" ? .liveBusy : .liveIdle

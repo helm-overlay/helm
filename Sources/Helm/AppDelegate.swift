@@ -39,11 +39,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.positionAtTop()
         panel.makeKeyAndOrderFront(nil)   // nonactivating: keys come to us, app stays inactive
         installKeyMonitor()
+        model.startTicking()              // age labels count up while open
         model.reloadInBackground()        // show instantly with cached data; refresh behind it
     }
 
     private func hide() {
         removeKeyMonitor()
+        model.stopTicking()
         panel.orderOut(nil)               // focus returns to whatever was active (the terminal)
     }
 

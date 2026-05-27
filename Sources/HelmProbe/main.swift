@@ -12,10 +12,8 @@ func dot(_ s: SessionState) -> String {
     }
 }
 
-let fmt = DateFormatter()
-fmt.dateFormat = "MMM d HH:mm"
-
 let store = SessionStore()
+let now = Date()
 let groups = store.grouped()
 
 let liveCount = groups.flatMap(\.sessions).filter(\.isLive).count
@@ -26,10 +24,10 @@ for (project, sessions) in groups {
     let title = project == "Other" ? "Other (legacy — migrating)" : project
     print("▌ \(title)")
     for s in sessions {
-        let when = fmt.string(from: s.lastActive)
+        let when = SessionStore.ageLabel(now.timeIntervalSince(s.lastActive))
         let meta = s.isLive ? "\(s.kind ?? "?")/\(s.state.rawValue)" : "cold"
         let label = s.label.count > 34 ? String(s.label.prefix(33)) + "…" : s.label
-        print("  \(dot(s.state))  \(label.padding(toLength: 34, withPad: " ", startingAt: 0))  \(when.padding(toLength: 12, withPad: " ", startingAt: 0))  \(meta)")
+        print("  \(dot(s.state))  \(label.padding(toLength: 34, withPad: " ", startingAt: 0))  \(when.padding(toLength: 6, withPad: " ", startingAt: 0))  \(meta)")
     }
     print("")
 }
