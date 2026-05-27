@@ -22,6 +22,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.eshaanshah.helm.app
         ENABLE_HARDENED_RUNTIME: "YES"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     sources:
       - path: Sources/Helm
     dependencies:
