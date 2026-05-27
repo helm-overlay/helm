@@ -131,6 +131,22 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertNil(SessionStore.idleReason(fromState: nil))
     }
 
+    // MARK: state-file reaping
+
+    func testDeadStateIdsAreThoseWithoutALiveSession() {
+        let onDisk: Set<String> = ["A", "B", "C"]
+        let alive: Set<String> = ["B"]   // only B is still running
+        XCTAssertEqual(SessionStore.deadStateIds(stateFileIds: onDisk, aliveIds: alive), ["A", "C"])
+    }
+
+    func testDeadStateIdsEmptyWhenAllLive() {
+        XCTAssertTrue(SessionStore.deadStateIds(stateFileIds: ["A"], aliveIds: ["A", "B"]).isEmpty)
+    }
+
+    func testDeadStateIdsReapsAllWhenNoneLive() {
+        XCTAssertEqual(SessionStore.deadStateIds(stateFileIds: ["A", "B"], aliveIds: []), ["A", "B"])
+    }
+
     // MARK: join
 
     func testMergeJoinsOnSessionId() {
@@ -168,6 +184,56 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(merged.count, 1)
         XCTAssertEqual(merged[0].label, "fresh")
         XCTAssertEqual(merged[0].state, .liveIdle)
+    }
+
+    // MARK: live reconcile (cheap refresh)
+
+    private func row(_ id: String, _ state: SessionState, pid: Int32? = nil) -> ChatSession {
+        ChatSession(sessionId: id, cwd: "/Users/me/projects/helm", project: "helm",
+                    label: id, state: state, kind: state == .cold ? nil : "interactive",
+                    pid: pid, lastActive: .distantPast)
+    }
+
+    func testReconcileFlipsBusyToIdleAndDropsToCold() {
+        let rows = [row("A", .liveBusy, pid: 1), row("B", .liveBusy, pid: 2)]
+        // A is now idle; B has exited (gone from the registry).
+        let live = [LiveRecord(pid: 1, sessionId: "A", kind: "interactive", status: "idle", name: nil)]
+        let (out, new) = SessionStore.reconcileLive(rows, live: live) { _ in .done }
+
+        XCTAssertFalse(new)
+        XCTAssertEqual(out.first { $0.sessionId == "A" }!.state, .liveIdle)
+        XCTAssertEqual(out.first { $0.sessionId == "A" }!.idleReason, .done)
+        let b = out.first { $0.sessionId == "B" }!
+        XCTAssertEqual(b.state, .cold)
+        XCTAssertNil(b.pid)
+    }
+
+    func testReconcileRevivesColdRowFromRegistry() {
+        let rows = [row("A", .cold)]
+        let live = [LiveRecord(pid: 9, sessionId: "A", kind: "interactive", status: "busy", name: nil)]
+        let (out, new) = SessionStore.reconcileLive(rows, live: live) { _ in nil }
+
+        XCTAssertFalse(new)              // A already had a row — not a "new" session
+        XCTAssertEqual(out[0].state, .liveBusy)
+        XCTAssertEqual(out[0].pid, 9)
+    }
+
+    func testReconcileFlagsNewSessionWithNoRow() {
+        let rows = [row("A", .liveBusy, pid: 1)]
+        let live = [
+            LiveRecord(pid: 1, sessionId: "A", kind: "interactive", status: "busy", name: nil),
+            LiveRecord(pid: 2, sessionId: "NEW", kind: "interactive", status: "busy", name: nil),
+        ]
+        let (_, new) = SessionStore.reconcileLive(rows, live: live) { _ in nil }
+        XCTAssertTrue(new)               // caller must full-reload to materialize NEW
+    }
+
+    func testReconcileIsIdentityWhenNothingChanged() {
+        let rows = [row("A", .liveBusy, pid: 1), row("B", .cold)]
+        let live = [LiveRecord(pid: 1, sessionId: "A", kind: "interactive", status: "busy", name: nil)]
+        let (out, new) = SessionStore.reconcileLive(rows, live: live) { _ in nil }
+        XCTAssertFalse(new)
+        XCTAssertEqual(out, rows)        // unchanged → caller skips the redraw
     }
 
     // MARK: ordering

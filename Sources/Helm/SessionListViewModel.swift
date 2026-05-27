@@ -21,24 +21,59 @@ final class SessionListViewModel: ObservableObject {
     private let store = SessionStore()
     private var all: [(project: String, sessions: [ChatSession])] = []
     private var ticker: Timer?
+    private var liveTicker: Timer?
     private var hideOlderThan: TimeInterval = HelmConfig.load().hideOlderThan
+
+    /// Sessions we've killed but whose process may still be exiting. While a sessionId is
+    /// here, every reconcile forces its row to cold — otherwise the per-second live ticker
+    /// reads the still-alive process back out of the registry and snaps the row to idle.
+    private var killing: Set<String> = []
 
     /// Hard cap on rows shown per project in the default view; the rest collapse into a
     /// "+N older" tail (still reachable by search or by expanding the project).
     private let perProjectCap = 5
 
-    /// Advance the age clock every 30s while the panel is open (no per-second churn).
+    /// While the panel is open: advance the age clock every 30s (the "5m ago" labels — no
+    /// per-second churn), and re-check live state every 1s so a session flipping
+    /// busy↔idle↔dead is reflected without waiting for the next summon.
     func startTicking() {
         now = Date()
         ticker?.invalidate()
         ticker = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.now = Date() }
         }
+        liveTicker?.invalidate()
+        liveTicker = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshLiveState() }
+        }
     }
 
     func stopTicking() {
         ticker?.invalidate()
         ticker = nil
+        liveTicker?.invalidate()
+        liveTicker = nil
+    }
+
+    /// Per-second live refresh: re-read only the live registry (+ idle verdicts) and
+    /// reconcile cached rows. Cold rows can't change, so history is never re-scanned. A
+    /// brand-new live session (no cached row) triggers one full reload to fetch its label.
+    func refreshLiveState() {
+        let snapshot = all.flatMap(\.sessions)
+        guard !snapshot.isEmpty else { return }
+        Task.detached(priority: .utility) {
+            let (rows, newSessions) = SessionStore().refreshLiveState(snapshot)
+            if newSessions {
+                await self.ingest(SessionStore().grouped())
+            } else if rows != snapshot {   // nothing moved → skip the redraw/animation
+                await self.applyLiveRefresh(rows)
+            }
+        }
+    }
+
+    private func applyLiveRefresh(_ rows: [ChatSession]) {
+        all = SessionStore.group(suppressKilled(rows))
+        applyFilter(animated: true)   // a row going live/dead slides to its new slot
     }
 
     var liveCount: Int { all.flatMap(\.sessions).filter(\.isLive).count }
@@ -69,18 +104,42 @@ final class SessionListViewModel: ObservableObject {
 
     private func ingest(_ grouped: [(project: String, sessions: [ChatSession])]) {
         hideOlderThan = HelmConfig.load().hideOlderThan   // pick up config edits on resummon
-        all = grouped
-        applyFilter()
+        all = SessionStore.group(suppressKilled(grouped.flatMap(\.sessions)))
+        applyFilter(animated: true)   // sessions appearing/leaving slide rather than snap
     }
 
-    /// Optimistic update for a self-initiated kill: flip the row to dead immediately
-    /// rather than waiting for the next poll to notice the process exited. The follow-up
-    /// reload reconciles (and agrees — the pid really is gone).
-    func markDead(_ sessionId: String) {
+    /// Kill a live session. Flip its row to dead now (optimistic), mark it as killing so no
+    /// reconcile resurrects it, then SIGTERM→SIGKILL off the main thread; once the process
+    /// is confirmed gone, drop the guard and reload — the registry now agrees it's dead.
+    func kill(sessionId: String, pid: Int32) {
+        killing.insert(sessionId)
+        SessionStore.clearState(sessionId)   // SessionEnd hook won't run on a killed proc
+        markDead(sessionId)
+        Task.detached(priority: .userInitiated) {
+            SessionStore.terminateAndWait(pid)
+            await self.finishKill(sessionId)
+        }
+    }
+
+    private func finishKill(_ sessionId: String) {
+        killing.remove(sessionId)
+        reloadInBackground()
+    }
+
+    /// Flip a row to dead immediately and slide it to its cold slot. Used by `kill` and
+    /// kept separate so the optimistic update and the process teardown stay decoupled.
+    private func markDead(_ sessionId: String) {
         all = all.map { group in
             (group.project, group.sessions.map { $0.sessionId == sessionId ? $0.markedDead() : $0 })
         }
-        applyFilter()
+        applyFilter(animated: true)   // the killed row slides down to its cold slot as it dies
+    }
+
+    /// Force any in-flight-kill row to cold regardless of what the registry says, so a
+    /// still-exiting process can't reconcile back to a live row mid-teardown.
+    private func suppressKilled(_ rows: [ChatSession]) -> [ChatSession] {
+        guard !killing.isEmpty else { return rows }
+        return rows.map { killing.contains($0.sessionId) ? $0.markedDead() : $0 }
     }
 
     // MARK: Query (typeahead)
@@ -160,7 +219,9 @@ final class SessionListViewModel: ObservableObject {
 
     // MARK: Filtering
 
-    private func applyFilter() {
+    /// `animated` is set only on the refresh/kill paths (rows appearing, leaving, or
+    /// re-sorting), so those glide; typing the filter stays instant.
+    private func applyFilter(animated: Bool = false) {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         let searching = !q.isEmpty
         let clock = now
@@ -169,8 +230,7 @@ final class SessionListViewModel: ObservableObject {
         // focus into the cross-project search below.
         if !searching, let focus = focusedProject {
             if let group = all.first(where: { $0.project == focus }), !group.sessions.isEmpty {
-                groups = [DisplayGroup(project: group.project, sessions: group.sessions, hiddenCount: 0)]
-                reconcileSelection()
+                commit([DisplayGroup(project: group.project, sessions: group.sessions, hiddenCount: 0)], animated: animated)
                 return
             }
             focusedProject = nil   // focused project vanished — fall through to the full list
@@ -201,8 +261,21 @@ final class SessionListViewModel: ObservableObject {
             let shown = Array(recent.prefix(perProjectCap))
             return DisplayGroup(project: group.project, sessions: shown, hiddenCount: recent.count - shown.count)
         }
-        groups = filtered
-        reconcileSelection()
+        commit(filtered, animated: animated)
+    }
+
+    /// Single place the published `groups` changes, optionally inside a spring so SwiftUI
+    /// drives the row insertion/removal transitions and the re-sort slide.
+    private func commit(_ newGroups: [DisplayGroup], animated: Bool) {
+        guard animated else {
+            groups = newGroups
+            reconcileSelection()
+            return
+        }
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
+            groups = newGroups
+            reconcileSelection()
+        }
     }
 
     /// Keep a valid selection: preserve if still visible, else first row.

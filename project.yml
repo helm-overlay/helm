@@ -49,3 +49,11 @@ targets:
       - path: Tests/HelmCoreTests
     dependencies:
       - target: HelmCore
+schemes:
+  HelmCore:
+    build:
+      targets:
+        HelmCore: all
+    test:
+      targets:
+        - HelmCoreTests

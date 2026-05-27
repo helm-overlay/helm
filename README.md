@@ -44,8 +44,10 @@ amber and pulses. Idle is split into needs-input vs done two ways:
 > - **`SessionEnd`** — same `rm -f` command (cleanup on clean exit).
 >
 > Helm also deletes the file itself when you `⌘X`-kill a session, since a killed process
-> never runs its `SessionEnd` hook. No hooks configured? Classification silently falls
-> back to (1).
+> never runs its `SessionEnd` hook. As a backstop for crashes/kills that skip `SessionEnd`
+> entirely, the app reaps `~/.helm/state` every 2 min, dropping any file whose session is
+> no longer running (`SessionStore.reapDeadState`). No hooks configured? Classification
+> silently falls back to (1).
 
 ## Build & run
 

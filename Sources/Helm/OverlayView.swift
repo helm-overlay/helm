@@ -71,10 +71,12 @@ struct OverlayView: View {
                                     .id(session.sessionId)
                                     .contentShape(Rectangle())
                                     .onTapGesture { onPick(session) }
+                                    .transition(.rowEnterLeave)
                             }
                             if group.hiddenCount > 0 {
                                 CollapseTail(label: "+\(group.hiddenCount) older")
                                     .onTapGesture { model.toggleFocus(group.project) }
+                                    .transition(.rowEnterLeave)
                             }
                         } header: {
                             GroupHeader(project: group.project)
@@ -124,6 +126,15 @@ struct OverlayView: View {
                 .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
             Text(label)
         }
+    }
+}
+
+private extension AnyTransition {
+    /// New rows drop in from above and fade up; rows leaving the visible set — e.g. the
+    /// 5th row pushed behind the "+N older" tail — slide down and fade out behind it.
+    static var rowEnterLeave: AnyTransition {
+        .asymmetric(insertion: .move(edge: .top).combined(with: .opacity),
+                    removal: .move(edge: .bottom).combined(with: .opacity))
     }
 }
 
@@ -324,11 +335,10 @@ private struct OrbitIndicator: View {
             if reduceMotion { spin = Self.park }
             else { run(.easeOut(duration: 0.3)) { spin = nextPark(from: spin) } }
         case .cold:
-            run(.easeOut(duration: 0.4)) { satelliteOpacity = 0 }
-            let delay = reduceMotion ? 0 : 0.4
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                run(.easeInOut(duration: 0.2)) { dashed = true }
-            }
+            // Satellite fades and the ring dashes in one beat, so death reads as a single
+            // motion that settles with the row's slide to its cold slot — not a dotted ring
+            // popping in before the satellite has gone.
+            run(.easeInOut(duration: 0.3)) { satelliteOpacity = 0; dashed = true }
         }
     }
 

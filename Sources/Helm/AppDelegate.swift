@@ -3,12 +3,18 @@ import SwiftUI
 import Carbon.HIToolbox
 import HelmCore
 
+/// Reap dead sessions' state files off the main thread (pure filesystem work, no UI).
+private func reapDeadState() {
+    Task.detached(priority: .utility) { SessionStore().reapDeadState() }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: OverlayPanel!
     private let model = SessionListViewModel()
     private var hotKey: GlobalHotKey?
     private var keyMonitor: Any?
+    private var reaper: Timer?
 
     // Summon hotkey: ⌥Space.
     private let hotKeyCode = UInt32(kVK_Space)
@@ -29,6 +35,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         model.reloadInBackground()   // warm the cache so the first summon is instant
+        startReaping()               // sweep state files of dead sessions in the background
+    }
+
+    /// Periodically clear `~/.helm/state` of verdicts for sessions that have exited. The
+    /// `SessionEnd` hook handles clean exits; this catches crashes/kills that skip it.
+    /// Runs whether or not the panel is open, since the leak does too.
+    private func startReaping() {
+        reapDeadState()
+        reaper = Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { _ in
+            reapDeadState()
+        }
     }
 
     // MARK: Show / hide
@@ -68,13 +85,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// have a pid; the row stays as a resumable cold row afterward.
     private func killSelected() {
         guard let s = model.selectedSession, let pid = s.pid else { return }
-        TerminalDispatcher.closePane(pid: pid)
-        SessionStore.terminate(pid)
-        SessionStore.clearState(s.sessionId)   // SessionEnd hook won't run on a killed proc
-        model.markDead(s.sessionId)            // optimistic: flip to dead now, don't await poll
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            self?.model.reloadInBackground()   // reconcile with the filesystem
-        }
+        TerminalDispatcher.closePane(pid: pid)   // resolve tty + close the pane before the kill
+        model.kill(sessionId: s.sessionId, pid: pid)
     }
 
     // MARK: Key handling (local monitor while visible)

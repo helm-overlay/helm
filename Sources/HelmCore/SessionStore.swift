@@ -40,6 +40,18 @@ public struct SessionStore {
         Self.group(load())
     }
 
+    /// Cheap live-only refresh for the open panel. Re-reads ONLY the live registry
+    /// (+ the per-idle-row verdict) and reconciles each given row's live state — never the
+    /// transcript history, since a cold row can't change. `newSessions` is true when the
+    /// registry holds a session we have no row for yet (started after the last full scan);
+    /// the caller does one full reload to pull its history/label.
+    public func refreshLiveState(_ rows: [ChatSession]) -> (rows: [ChatSession], newSessions: Bool) {
+        Self.reconcileLive(rows, live: readLive()) { sessionId in
+            readStateFile(sessionId: sessionId)
+                ?? locateTranscript(sessionId).flatMap(readTail).map(Self.classifyIdleTail)
+        }
+    }
+
     // MARK: Pure logic (unit-tested without the filesystem)
 
     /// Map a working directory to its display group.
@@ -80,6 +92,28 @@ public struct SessionStore {
                 kind: l.kind, pid: l.pid, lastActive: Date()))
         }
         return out
+    }
+
+    /// Reconcile rows' live state against the registry, without touching history. A row in
+    /// the registry takes its status (busy/idle), pid and kind; a row absent from it falls
+    /// to cold. `idleReason` supplies the verdict for now-idle rows (the IO half, injected
+    /// so this stays pure and testable). `newSessions` flags a registry entry with no
+    /// matching row — the caller must full-reload to materialize it (needs cwd/label).
+    public static func reconcileLive(_ rows: [ChatSession], live: [LiveRecord],
+                                     idleReason: (String) -> IdleReason?)
+        -> (rows: [ChatSession], newSessions: Bool) {
+        let liveById = Dictionary(live.map { ($0.sessionId, $0) }, uniquingKeysWith: { a, _ in a })
+        let known = Set(rows.map(\.sessionId))
+        let newSessions = live.contains { !known.contains($0.sessionId) }
+        let updated = rows.map { row -> ChatSession in
+            let l = liveById[row.sessionId]
+            let state = Self.state(forStatus: l?.status, isLive: l != nil)
+            return ChatSession(
+                sessionId: row.sessionId, cwd: row.cwd, project: row.project, label: row.label,
+                state: state, kind: l?.kind, pid: l?.pid, lastActive: row.lastActive,
+                branch: row.branch, idleReason: state == .liveIdle ? idleReason(row.sessionId) : nil)
+        }
+        return (updated, newSessions)
     }
 
     /// "My kind of thread": a session the user started interactively, not one a hook or
@@ -201,7 +235,7 @@ public struct SessionStore {
         return endsOnQuestion ? .needsInput : .done
     }
 
-    static func group(_ sessions: [ChatSession]) -> [(project: String, sessions: [ChatSession])] {
+    public static func group(_ sessions: [ChatSession]) -> [(project: String, sessions: [ChatSession])] {
         let byProject = Dictionary(grouping: sessions, by: \.project)
         let sortRows: ([ChatSession]) -> [ChatSession] = { rows in
             rows.sorted {
@@ -249,9 +283,41 @@ public struct SessionStore {
         #endif
     }
 
+    /// Kill and block until the process is actually gone: SIGTERM, wait out `grace` for it
+    /// to exit on its own (`claude` shuts down gracefully and isn't our child, so it can
+    /// take ~1s), then SIGKILL if it's still up. Blocking — call off the main thread. This
+    /// is what lets the caller reload only once the registry will agree the session is
+    /// dead, instead of racing a still-exiting process back into an idle row.
+    public static func terminateAndWait(_ pid: Int32, grace: Double = 1.5) {
+        #if canImport(Darwin)
+        _ = kill(pid, SIGTERM)
+        if waitForExit(pid, timeout: grace) { return }
+        _ = kill(pid, SIGKILL)
+        _ = waitForExit(pid, timeout: 0.5)
+        #endif
+    }
+
+    /// Poll `isAlive` (50ms) until the process exits or `timeout` elapses; true if it went.
+    @discardableResult
+    private static func waitForExit(_ pid: Int32, timeout: Double) -> Bool {
+        #if canImport(Darwin)
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !isAlive(pid) { return true }
+            usleep(50_000)
+        }
+        #endif
+        return !isAlive(pid)
+    }
+
+    /// The directory Helm and the Stop hook share for per-session classifications.
+    static func stateDir(home: String) -> URL {
+        URL(fileURLWithPath: home).appendingPathComponent(".helm/state")
+    }
+
     /// The path Helm and the Stop hook share for a session's classification.
     static func stateFileURL(_ sessionId: String, home: String) -> URL {
-        URL(fileURLWithPath: home).appendingPathComponent(".helm/state/\(sessionId).json")
+        stateDir(home: home).appendingPathComponent("\(sessionId).json")
     }
 
     /// Delete a session's state file ourselves. Needed after a self-initiated kill: the
@@ -259,6 +325,54 @@ public struct SessionStore {
     /// `sessionId` (hence the filename) is reused on `claude --resume`.
     public static func clearState(_ sessionId: String, home: String = NSHomeDirectory()) {
         try? FileManager.default.removeItem(at: stateFileURL(sessionId, home: home))
+    }
+
+    // MARK: State-file reaping
+
+    /// Of the state files present, the ones whose session is no longer running. Pure set
+    /// difference so it's tested without the filesystem.
+    public static func deadStateIds(stateFileIds: Set<String>, aliveIds: Set<String>) -> Set<String> {
+        stateFileIds.subtracting(aliveIds)
+    }
+
+    /// Delete state files left behind by sessions that have since exited. The `SessionEnd`
+    /// hook clears a session's file on clean exit; a crash or `kill -9` skips that, leaking
+    /// a stale verdict (which a later `claude --resume` would briefly re-read, since it
+    /// reuses the sessionId). A nil alive set means we couldn't read the registry — skip
+    /// the sweep rather than risk reaping files for sessions that are actually live.
+    @discardableResult
+    public func reapDeadState() -> [String] {
+        guard let alive = aliveSessionIds() else { return [] }
+        let dead = Self.deadStateIds(stateFileIds: stateFileIds(), aliveIds: alive)
+        for id in dead {
+            try? FileManager.default.removeItem(at: Self.stateFileURL(id, home: home))
+        }
+        return Array(dead)
+    }
+
+    /// sessionIds that currently have a state file (filename minus `.json`).
+    private func stateFileIds() -> Set<String> {
+        let files = (try? FileManager.default.contentsOfDirectory(at: Self.stateDir(home: home),
+            includingPropertiesForKeys: nil)) ?? []
+        return Set(files.filter { $0.pathExtension == "json" }
+                        .map { $0.deletingPathExtension().lastPathComponent })
+    }
+
+    /// Every running session's id, by liveness alone (any entrypoint). Unlike `readLive()`
+    /// this does NOT drop automation threads — the reaper asks "is this process alive?",
+    /// not "is this my kind of thread?". nil if the registry dir can't be enumerated.
+    private func aliveSessionIds() -> Set<String>? {
+        let dir = claudeDir.appendingPathComponent("sessions")
+        guard let files = try? FileManager.default.contentsOfDirectory(at: dir,
+            includingPropertiesForKeys: nil) else { return nil }
+        var out: Set<String> = []
+        for f in files where f.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: f),
+                  let j = try? JSONDecoder().decode(LiveJSON.self, from: data),
+                  Self.isAlive(j.pid) else { continue }
+            out.insert(j.sessionId)
+        }
+        return out
     }
 
     /// `kill(pid, 0)`: 0 == alive; EPERM == alive but not ours; ESRCH == dead.
