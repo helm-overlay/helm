@@ -142,13 +142,18 @@ public struct SessionStore {
         return out
     }
 
+    /// cwd/gitBranch/aiTitle all appear within the first records, so we only read the
+    /// file head instead of loading the whole (possibly multi-MB) transcript.
+    private static let headBytes = 64 * 1024
+
     private func readTranscript(_ url: URL) -> HistoryRecord {
         let sid = url.deletingPathExtension().lastPathComponent
         let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
             .contentModificationDate ?? .distantPast
 
         var cwd: String?, gitBranch: String?, aiTitle: String?
-        if let content = try? String(contentsOf: url, encoding: .utf8) {
+        // A truncated final line (from the head read) simply fails to parse and is skipped.
+        if let content = readHead(url) {
             for line in content.split(separator: "\n", omittingEmptySubsequences: true) {
                 guard let data = line.data(using: .utf8),
                       let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -165,5 +170,12 @@ public struct SessionStore {
         }
         return HistoryRecord(sessionId: sid, cwd: cwd, gitBranch: gitBranch,
                              aiTitle: aiTitle, lastActive: mtime)
+    }
+
+    private func readHead(_ url: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: Self.headBytes) else { return nil }
+        return String(decoding: data, as: UTF8.self)
     }
 }

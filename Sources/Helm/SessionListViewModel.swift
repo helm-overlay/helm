@@ -26,8 +26,23 @@ final class SessionListViewModel: ObservableObject {
         visibleFlat.first { $0.sessionId == selection }
     }
 
+    /// Synchronous reload (probe/tests).
     func reload() {
         all = store.grouped()
+        applyFilter()
+    }
+
+    /// Scan the filesystem off the main thread, then apply on main. Cached data stays
+    /// visible until the fresh scan lands, so the panel never blocks on I/O.
+    func reloadInBackground() {
+        Task.detached(priority: .userInitiated) {
+            let grouped = SessionStore().grouped()
+            await self.ingest(grouped)
+        }
+    }
+
+    private func ingest(_ grouped: [(project: String, sessions: [ChatSession])]) {
+        all = grouped
         applyFilter()
     }
 

@@ -10,9 +10,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKey: GlobalHotKey?
     private var keyMonitor: Any?
 
-    // Default summon hotkey: ⌃⌥⌘H  (mnemonic: Helm). Unlikely to clash.
-    private let hotKeyCode = UInt32(kVK_ANSI_H)
-    private let hotKeyMods = UInt32(controlKey | optionKey | cmdKey)
+    // Summon hotkey: ⌥Space.
+    private let hotKeyCode = UInt32(kVK_Space)
+    private let hotKeyMods = UInt32(optionKey)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let root = OverlayView(model: model,
@@ -25,8 +25,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.toggle()
         }
         if hotKey == nil {
-            NSLog("Helm: failed to register global hotkey (⌃⌥⌘H may be taken).")
+            NSLog("Helm: failed to register global hotkey (⌥Space may be taken).")
         }
+
+        model.reloadInBackground()   // warm the cache so the first summon is instant
     }
 
     // MARK: Show / hide
@@ -34,10 +36,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func toggle() { panel.isVisible ? hide() : show() }
 
     private func show() {
-        model.reload()
         panel.positionAtTop()
         panel.makeKeyAndOrderFront(nil)   // nonactivating: keys come to us, app stays inactive
         installKeyMonitor()
+        model.reloadInBackground()        // show instantly with cached data; refresh behind it
     }
 
     private func hide() {
