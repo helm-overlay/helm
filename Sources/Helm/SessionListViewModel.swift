@@ -17,6 +17,7 @@ final class SessionListViewModel: ObservableObject {
     private let store = SessionStore()
     private var all: [(project: String, sessions: [ChatSession])] = []
     private var ticker: Timer?
+    private var hideOlderThan: TimeInterval = HelmConfig.load().hideOlderThan
 
     /// Advance the age clock every 30s while the panel is open (no per-second churn).
     func startTicking() {
@@ -44,6 +45,7 @@ final class SessionListViewModel: ObservableObject {
 
     /// Synchronous reload (probe/tests).
     func reload() {
+        hideOlderThan = HelmConfig.load().hideOlderThan
         all = store.grouped()
         applyFilter()
     }
@@ -58,6 +60,7 @@ final class SessionListViewModel: ObservableObject {
     }
 
     private func ingest(_ grouped: [(project: String, sessions: [ChatSession])]) {
+        hideOlderThan = HelmConfig.load().hideOlderThan   // pick up config edits on resummon
         all = grouped
         applyFilter()
     }
@@ -81,12 +84,20 @@ final class SessionListViewModel: ObservableObject {
 
     private func applyFilter() {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        let searching = !q.isEmpty
+        let clock = now
+
         let filtered: [DisplayGroup] = all.compactMap { group in
-            guard !q.isEmpty else { return DisplayGroup(project: group.project, sessions: group.sessions) }
-            let hits = group.sessions.filter {
-                $0.label.lowercased().contains(q) || group.project.lowercased().contains(q)
+            let rows = group.sessions.filter { s in
+                if searching {
+                    // Search spans everything, including old sessions.
+                    return s.label.lowercased().contains(q) || group.project.lowercased().contains(q)
+                }
+                // Default view: hide old sessions — but never a live one.
+                if s.isLive { return true }
+                return !SessionStore.isOlderThan(hideOlderThan, lastActive: s.lastActive, now: clock)
             }
-            return hits.isEmpty ? nil : DisplayGroup(project: group.project, sessions: hits)
+            return rows.isEmpty ? nil : DisplayGroup(project: group.project, sessions: rows)
         }
         groups = filtered
 

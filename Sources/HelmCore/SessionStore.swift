@@ -85,15 +85,23 @@ public struct SessionStore {
     }
 
     /// Coarse "time since last activity" label (no seconds/minutes precision):
-    /// `<15m`, `<30m`, `<1h`, then whole hours floored — 2h59m shows as `2h`.
+    /// `<15m`, `<30m`, `<1h`, then whole hours/days/weeks floored — 2h59m → `2h`,
+    /// 6d → `6d`, 13d → `1w`.
     public static func ageLabel(_ interval: TimeInterval) -> String {
         let minutes = max(0, Int(interval / 60))
         switch minutes {
-        case ..<15:  return "<15m"
-        case ..<30:  return "<30m"
-        case ..<60:  return "<1h"
-        default:     return "\(minutes / 60)h"
+        case ..<15:     return "<15m"
+        case ..<30:     return "<30m"
+        case ..<60:     return "<1h"
+        case ..<1_440:  return "\(minutes / 60)h"        // < 24h
+        case ..<10_080: return "\(minutes / 1_440)d"     // < 7d
+        default:        return "\(minutes / 10_080)w"
         }
+    }
+
+    /// Whether a session is past the "hide old sessions" cutoff (cutoff <= 0 disables).
+    public static func isOlderThan(_ cutoff: TimeInterval, lastActive: Date, now: Date) -> Bool {
+        cutoff > 0 && now.timeIntervalSince(lastActive) > cutoff
     }
 
     static func state(forStatus status: String?, isLive: Bool) -> SessionState {

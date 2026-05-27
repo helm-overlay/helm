@@ -28,9 +28,18 @@ public enum TerminalKind: String, Equatable, CaseIterable {
 /// User config at ~/.config/helm/config.json. Missing file → all defaults.
 public struct HelmConfig: Equatable {
     public var terminal: TerminalKind
+    /// Sessions idle longer than this are hidden from the default view (still searchable).
+    /// 0 or negative disables the cutoff (show everything).
+    public var hideOlderThanDays: Int
 
-    public init(terminal: TerminalKind = .default) {
+    public init(terminal: TerminalKind = .default, hideOlderThanDays: Int = 7) {
         self.terminal = terminal
+        self.hideOlderThanDays = hideOlderThanDays
+    }
+
+    /// Cutoff as a duration; 0 if disabled.
+    public var hideOlderThan: TimeInterval {
+        hideOlderThanDays > 0 ? TimeInterval(hideOlderThanDays) * 86_400 : 0
     }
 
     public static var path: URL {
@@ -42,6 +51,8 @@ public struct HelmConfig: Equatable {
         guard let data = try? Data(contentsOf: url),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return HelmConfig() }
-        return HelmConfig(terminal: TerminalKind(parsing: obj["terminal"] as? String))
+        return HelmConfig(
+            terminal: TerminalKind(parsing: obj["terminal"] as? String),
+            hideOlderThanDays: (obj["hideOlderThanDays"] as? Int) ?? HelmConfig().hideOlderThanDays)
     }
 }
