@@ -15,8 +15,37 @@ design decisions.
     sessionId). Extracts `cwd` / `gitBranch` / `aiTitle` + file mtime.
   - Grouping: cwd under `~/projects/<name>` → `<name>`, everything else → `Other`.
 - `Sources/HelmProbe` — CLI that prints the merged tree (uses `HelmCore` directly).
+- `Sources/Helm` — the `NSPanel` app: non-activating floating overlay + global hotkey,
+  the SwiftUI row list, the orbit status indicator, and terminal dispatch.
 - `Tests/HelmCoreTests` — unit tests for the pure join/group/state logic.
-- *(next)* the `NSPanel` app target: non-activating floating overlay + global hotkey.
+
+## Session status & needs-input classification
+
+Each row's orbit indicator encodes state: **busy** orbits, **idle** parks at 9 o'clock,
+**dead** dashes the ring, and **needs-input** (an idle session waiting on *you*) parks
+amber and pulses. Idle is split into needs-input vs done two ways:
+
+1. **In-process (always on, fallback):** `SessionStore.classifyIdleTail` reads the
+   transcript tail — an unanswered `tool_use` or a final line ending in `?` → needs-input.
+   High precision, low recall.
+2. **Haiku Stop hook (recall lift):** a classification verdict written to
+   `~/.helm/state/<sessionId>.json`, which `load()` prefers when present.
+
+> **The hooks live in `~/.claude/settings.json`, NOT in this repo** (Claude Code config,
+> per-machine). To reproduce on another machine, add these to `settings.json` → `hooks`:
+>
+> - **`Stop`** — `type: "agent"`, `model: "claude-haiku-4-5-..."`: prompt the agent to
+>   read `last_assistant_message` from the hook input, classify needs-input/done, and
+>   `Write` `~/.helm/state/<session_id>.json` as `{"reason":"...","sessionId":"...","ts":N}`.
+>   (Agent hooks inherit the session's tool perms, so `Write` must be allowed.)
+> - **`UserPromptSubmit`** — `type: "command"`, `async: true`:
+>   `rm -f "$HOME/.helm/state/$(jq -r '.session_id').json"` (wipe at turn start so any
+>   present file is from the latest `Stop`).
+> - **`SessionEnd`** — same `rm -f` command (cleanup on clean exit).
+>
+> Helm also deletes the file itself when you `⌘X`-kill a session, since a killed process
+> never runs its `SessionEnd` hook. No hooks configured? Classification silently falls
+> back to (1).
 
 ## Build & run
 
