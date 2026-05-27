@@ -1,0 +1,30 @@
+name: Helm
+options:
+  bundleIdPrefix: com.eshaanshah.helm
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+targets:
+  HelmCore:
+    type: library.static
+    platform: macOS
+    sources:
+      - path: Sources/HelmCore
+  HelmProbe:
+    type: tool
+    platform: macOS
+    sources:
+      - path: Sources/HelmProbe
+    dependencies:
+      - target: HelmCore
+  HelmCoreTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/HelmCoreTests
+    dependencies:
+      - target: HelmCore
