@@ -24,6 +24,9 @@ targets:
   HelmCoreTests:
     type: bundle.unit-test
     platform: macOS
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
     sources:
       - path: Tests/HelmCoreTests
     dependencies:
