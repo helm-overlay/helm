@@ -59,6 +59,27 @@ final class SessionStoreTests: XCTestCase {
 
     // MARK: state derivation
 
+    // MARK: head read (skip image blobs, recover later cwd/aiTitle/entrypoint)
+
+    func testCollectSmallLinesSkipsMegaLineAndKeepsLaterMetadata() {
+        let small1 = #"{"type":"mode","mode":"normal"}"#
+        let megaLine = "{\"role\":\"user\",\"image\":\"" + String(repeating: "A", count: 300 * 1024) + "\"}"
+        let small2 = #"{"cwd":"/Users/me/projects/p","entrypoint":"cli","aiTitle":"hello"}"#
+        let blob = Data((small1 + "\n" + megaLine + "\n" + small2 + "\n").utf8)
+        var offset = 0
+        let result = SessionStore.collectSmallLines { n in
+            guard offset < blob.count else { return Data() }
+            let end = min(offset + n, blob.count)
+            let slice = blob.subdata(in: offset..<end)
+            offset = end
+            return slice
+        }
+        XCTAssertNotNil(result)
+        XCTAssertTrue(result?.contains(#""cwd":"/Users/me/projects/p""#) == true)
+        XCTAssertTrue(result?.contains(#""aiTitle":"hello""#) == true)
+        XCTAssertFalse(result?.contains("AAAAA") == true)   // mega line dropped
+    }
+
     func testStateDerivation() {
         XCTAssertEqual(SessionStore.state(forStatus: "busy", isLive: true), .liveBusy)
         XCTAssertEqual(SessionStore.state(forStatus: "idle", isLive: true), .liveIdle)
