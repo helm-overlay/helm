@@ -35,9 +35,11 @@ public struct SessionStore {
     }
 
     /// Grouped + sorted for display: projects alphabetical, "Other" last; within a
-    /// group live rows first, then newest-first by lastActive.
+    /// group live rows first, then newest-first by lastActive. Includes every project
+    /// dir under `~/projects/` even if it has no sessions yet, so a freshly-created
+    /// project shows up in the overlay before its first chat.
     public func grouped() -> [(project: String, sessions: [ChatSession])] {
-        Self.group(load())
+        Self.group(load(), includeEmpty: listProjects())
     }
 
     /// Cheap live-only refresh for the open panel. Re-reads ONLY the live registry
@@ -235,8 +237,12 @@ public struct SessionStore {
         return endsOnQuestion ? .needsInput : .done
     }
 
-    public static func group(_ sessions: [ChatSession]) -> [(project: String, sessions: [ChatSession])] {
-        let byProject = Dictionary(grouping: sessions, by: \.project)
+    public static func group(_ sessions: [ChatSession], includeEmpty: [String] = [])
+        -> [(project: String, sessions: [ChatSession])] {
+        var byProject = Dictionary(grouping: sessions, by: \.project)
+        for name in includeEmpty where byProject[name] == nil {
+            byProject[name] = []
+        }
         let sortRows: ([ChatSession]) -> [ChatSession] = { rows in
             rows.sorted {
                 if $0.isLive != $1.isLive { return $0.isLive }       // live first
@@ -249,6 +255,27 @@ public struct SessionStore {
                 return a.localizedCaseInsensitiveCompare(b) == .orderedAscending
             }
             .map { ($0, sortRows(byProject[$0]!)) }
+    }
+
+    /// Non-hidden dirs under `~/projects/` that contain a `PROJECT.md` — i.e. real
+    /// projects, even if they have no sessions yet. Cheap (one readdir + per-entry
+    /// stat); safe to call on every live-refresh tick.
+    public func listProjects() -> [String] {
+        let dir = URL(fileURLWithPath: home).appendingPathComponent("projects")
+        let entries = (try? FileManager.default.contentsOfDirectory(at: dir,
+            includingPropertiesForKeys: [.isDirectoryKey])) ?? []
+        var out: [String] = []
+        for entry in entries {
+            let name = entry.lastPathComponent
+            if name.hasPrefix(".") { continue }
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: entry.path, isDirectory: &isDir),
+                  isDir.boolValue,
+                  FileManager.default.fileExists(atPath: entry.appendingPathComponent("PROJECT.md").path)
+            else { continue }
+            out.append(name)
+        }
+        return out
     }
 
     // MARK: Filesystem readers

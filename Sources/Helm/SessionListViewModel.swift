@@ -72,7 +72,7 @@ final class SessionListViewModel: ObservableObject {
     }
 
     private func applyLiveRefresh(_ rows: [ChatSession]) {
-        all = SessionStore.group(suppressKilled(rows))
+        all = SessionStore.group(suppressKilled(rows), includeEmpty: store.listProjects())
         applyFilter(animated: true)   // a row going live/dead slides to its new slot
     }
 
@@ -104,7 +104,8 @@ final class SessionListViewModel: ObservableObject {
 
     private func ingest(_ grouped: [(project: String, sessions: [ChatSession])]) {
         hideOlderThan = HelmConfig.load().hideOlderThan   // pick up config edits on resummon
-        all = SessionStore.group(suppressKilled(grouped.flatMap(\.sessions)))
+        all = SessionStore.group(suppressKilled(grouped.flatMap(\.sessions)),
+                                 includeEmpty: store.listProjects())
         applyFilter(animated: true)   // sessions appearing/leaving slide rather than snap
     }
 
@@ -240,6 +241,7 @@ final class SessionListViewModel: ObservableObject {
             // While searching, span everything — every project (incl. legacy "Other"),
             // no recency cutoff, no collapse — and rank by fuzzy match across all fields.
             if searching {
+                if group.sessions.isEmpty { return nil }   // empty group can't match
                 let rows = group.sessions.filter { SessionStore.matches($0, query: q) }
                 return rows.isEmpty ? nil : DisplayGroup(project: group.project, sessions: rows, hiddenCount: 0)
             }
@@ -247,11 +249,18 @@ final class SessionListViewModel: ObservableObject {
             // Default view is a switcher, not an archive:
             // 1. Legacy "Other" is search-only — it never takes space in the default list.
             if group.project == "Other" { return nil }
-            // 2. Recency cutoff, but a live row is never hidden.
+            // 2. Recency cutoff, but a live row is never hidden. An empty result becomes
+            //    a single placeholder row so ⌘N / Enter / arrow-nav has a selectable
+            //    target for the project.
             let recent = group.sessions.filter { s in
                 s.isLive || !SessionStore.isOlderThan(hideOlderThan, lastActive: s.lastActive, now: clock)
             }
-            guard !recent.isEmpty else { return nil }
+            if recent.isEmpty {
+                let cwd = "\(NSHomeDirectory())/projects/\(group.project)"
+                return DisplayGroup(project: group.project,
+                                    sessions: [.placeholder(forProject: group.project, cwd: cwd)],
+                                    hiddenCount: 0)
+            }
             // 3. Hard cap per project — show at most `perProjectCap` rows (live-first,
             //    newest-first, as store.grouped() already sorts). The rest collapse behind
             //    a "+N older" tail; ⌘↓ (or tapping the tail) focuses to reveal them all.

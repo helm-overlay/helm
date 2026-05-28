@@ -25,16 +25,42 @@ public enum TerminalKind: String, Equatable, CaseIterable {
     }
 }
 
+/// Which editor opens when a task row is activated. The first element is the binary
+/// (resolved via `env`); successive elements are flags. Defaults to Zed; the user can
+/// override via `taskEditor` in `~/.config/helm/config.json` (string or array).
+public struct TaskEditor: Equatable {
+    public let argv: [String]
+
+    public static let `default` = TaskEditor(argv: ["zed"])
+
+    public init(argv: [String]) { self.argv = argv }
+
+    /// Parse from the config JSON: `"code"` → `["code"]`; `["code", "--wait"]` → same.
+    /// Empty or malformed → default.
+    public init(parsing raw: Any?) {
+        if let s = raw as? String, !s.isEmpty {
+            self.argv = s.split(separator: " ").map(String.init)
+        } else if let arr = raw as? [String], !arr.isEmpty {
+            self.argv = arr
+        } else {
+            self.argv = Self.default.argv
+        }
+    }
+}
+
 /// User config at ~/.config/helm/config.json. Missing file → all defaults.
 public struct HelmConfig: Equatable {
     public var terminal: TerminalKind
     /// Sessions idle longer than this are hidden from the default view (still searchable).
     /// 0 or negative disables the cutoff (show everything).
     public var hideOlderThanDays: Int
+    public var taskEditor: TaskEditor
 
-    public init(terminal: TerminalKind = .default, hideOlderThanDays: Int = 1) {
+    public init(terminal: TerminalKind = .default, hideOlderThanDays: Int = 1,
+                taskEditor: TaskEditor = .default) {
         self.terminal = terminal
         self.hideOlderThanDays = hideOlderThanDays
+        self.taskEditor = taskEditor
     }
 
     /// Cutoff as a duration; 0 if disabled.
@@ -53,6 +79,7 @@ public struct HelmConfig: Equatable {
         else { return HelmConfig() }
         return HelmConfig(
             terminal: TerminalKind(parsing: obj["terminal"] as? String),
-            hideOlderThanDays: (obj["hideOlderThanDays"] as? Int) ?? HelmConfig().hideOlderThanDays)
+            hideOlderThanDays: (obj["hideOlderThanDays"] as? Int) ?? HelmConfig().hideOlderThanDays,
+            taskEditor: TaskEditor(parsing: obj["taskEditor"]))
     }
 }

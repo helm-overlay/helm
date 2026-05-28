@@ -269,6 +269,15 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(groups[0].sessions.map(\.label), ["live-old", "cold-new"]) // live first
     }
 
+    func testGroupIncludesEmptyProjectsFromDisk() {
+        let s1 = ChatSession(sessionId: "1", cwd: "", project: "alpha", label: "x", state: .cold, kind: nil, pid: nil, lastActive: Date())
+        // "alpha" already has a session; "bravo" is on disk but has no sessions yet.
+        let groups = SessionStore.group([s1], includeEmpty: ["alpha", "bravo"])
+        XCTAssertEqual(groups.map(\.project), ["alpha", "bravo"])
+        XCTAssertEqual(groups[0].sessions.map(\.sessionId), ["1"])    // existing rows preserved
+        XCTAssertEqual(groups[1].sessions, [])                         // empty group rendered
+    }
+
     // MARK: search
 
     func testFuzzyMatchesSubsequenceNotJustSubstring() {

@@ -8,6 +8,9 @@ struct OverlayView: View {
     let onNewChat: () -> Void
     let onDismiss: () -> Void
 
+    /// Renders content only; the panel chrome (material, border, rounded corner) is
+    /// owned by `RootView` so view switches crossfade the content without doubling
+    /// the material layer.
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -16,12 +19,6 @@ struct OverlayView: View {
             Divider().opacity(0.5)
             footer
         }
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.white.opacity(0.08), lineWidth: 1)
-        )
     }
 
     // MARK: Header (query line)
@@ -187,11 +184,20 @@ private struct SessionRow: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            OrbitIndicator(state: session.state, needsInput: session.needsInput)
-                .frame(width: 14, height: 14)
+            if session.isPlaceholder {
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 14, height: 14)
+            } else {
+                OrbitIndicator(state: session.state, needsInput: session.needsInput)
+                    .frame(width: 14, height: 14)
+            }
             HStack(spacing: 10) {
                 Text(session.label).lineLimit(1)
                     .font(.system(size: 14))
+                    .foregroundStyle(session.isPlaceholder ? .tertiary : .primary)
+                    .italic(session.isPlaceholder)
                 Spacer(minLength: 12)
                 if let kind = session.kind {
                     Text(kind).font(.system(size: 10, weight: .medium))
@@ -199,9 +205,11 @@ private struct SessionRow: View {
                         .padding(.horizontal, 5).padding(.vertical, 1)
                         .background(.white.opacity(0.06), in: Capsule())
                 }
-                Text(SessionStore.ageLabel(now.timeIntervalSince(session.lastActive)))
-                    .font(.system(size: 11)).foregroundStyle(.tertiary)
-                    .frame(width: 48, alignment: .trailing)
+                if !session.isPlaceholder {
+                    Text(SessionStore.ageLabel(now.timeIntervalSince(session.lastActive)))
+                        .font(.system(size: 11)).foregroundStyle(.tertiary)
+                        .frame(width: 48, alignment: .trailing)
+                }
             }
             .padding(.leading, 12)
         }
@@ -216,7 +224,9 @@ private struct SessionRow: View {
 /// Orbit-metaphor status indicator. The ring is always present; only the satellite's
 /// behavior encodes state — it circles for `liveBusy` (motion == alive now), parks at
 /// 9 o'clock for `liveIdle`, and is gone (ring goes dashed) for `cold`. An idle session
-/// that's waiting on the user (`needsInput`) parks in amber and *knocks* (pulses).
+/// that's waiting on the user (`needsInput`) parks in amber and pings a sonar ring
+/// outward; an idle session that finished cleanly parks in violet and breathes slowly
+/// (calm "sleeping LED", says "ready to verify").
 /// Transitions glide/fade rather than snap. Reduce-motion parks busy at the top and
 /// holds the knock steady.
 ///
@@ -230,6 +240,7 @@ private struct OrbitIndicator: View {
 
     private static let emerald = Color(red: 0.204, green: 0.827, blue: 0.600)  // #34D399
     private static let amber = Color(red: 0.984, green: 0.749, blue: 0.141)    // #FBBF24
+    private static let violet = Color(red: 0.655, green: 0.545, blue: 0.980)   // #A78BFA — idle/done, "ready to verify"
     private static let gray = Color.white.opacity(0.28)
     private static let center = CGPoint(x: 7, y: 7)
     private static let radius: CGFloat = 6.5
@@ -268,6 +279,7 @@ private struct OrbitIndicator: View {
     private var ringColor: Color {
         if state == .liveBusy { return Self.emerald.opacity(0.25) }
         if knock { return Self.amber.opacity(0.3) }
+        if state == .liveIdle { return Self.violet.opacity(0.3) }
         return Self.gray
     }
 
@@ -291,13 +303,35 @@ private struct OrbitIndicator: View {
 
     @ViewBuilder private var satellite: some View {
         let active = state == .liveBusy
-        let color = active ? Self.emerald : (knock ? Self.amber : Self.gray)
+        let idleDone = state == .liveIdle && !knock
+        let color = active ? Self.emerald : (knock ? Self.amber : (idleDone ? Self.violet : Self.gray))
         let glowing = active || knock
         if knock && !reduceMotion {
+            // Sonar ping: a ring expands outward from the parked satellite and fades,
+            // every 1.3s. Driven by scaleEffect (Core Animation transform) so the
+            // growth is sub-pixel smooth; .frame() rebuilds layout each tick and
+            // showed visible quantized steps. Ease-out gives the ripple a natural
+            // "spread and settle" rather than a linear march.
             TimelineView(.animation) { ctx in
-                let p = 0.5 - 0.5 * cos(2 * .pi * (ctx.date.timeIntervalSinceReferenceDate / 1.3)
+                let p = (ctx.date.timeIntervalSinceReferenceDate / 1.3)
+                    .truncatingRemainder(dividingBy: 1)
+                let eased = 1 - pow(1 - p, 2)
+                ZStack {
+                    Circle()
+                        .stroke(color.opacity(1 - p), lineWidth: 1)
+                        .frame(width: 4, height: 4)
+                        .scaleEffect(1 + 1.5 * eased)
+                    dot(color, glowing: glowing)
+                }
+                .position(satellitePoint)
+            }
+        } else if idleDone && !reduceMotion {
+            // Slow breathing (~3.5s): "sleeping LED" — ambient, not a signal. Says
+            // alive + finished + at rest, without competing with the amber sonar.
+            TimelineView(.animation) { ctx in
+                let p = 0.5 - 0.5 * cos(2 * .pi * (ctx.date.timeIntervalSinceReferenceDate / 3.5)
                     .truncatingRemainder(dividingBy: 1))
-                dot(color, glowing: glowing).opacity(0.4 + 0.6 * p).position(satellitePoint)
+                dot(color, glowing: glowing).opacity(0.6 + 0.4 * p).position(satellitePoint)
             }
         } else {
             dot(color, glowing: glowing).position(satellitePoint).opacity(satelliteOpacity)

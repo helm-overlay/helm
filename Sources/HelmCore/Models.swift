@@ -55,6 +55,17 @@ public struct ChatSession: Identifiable, Equatable {
                     state: .cold, kind: nil, pid: nil, lastActive: lastActive,
                     branch: branch, idleReason: nil)
     }
+
+    /// Synthetic row for an empty project group — selectable so ⌘N / Enter has somewhere
+    /// to land. Not a real session: its `sessionId` carries `placeholderPrefix`; the
+    /// dispatch path treats Enter as "new chat here" instead of "resume".
+    public static let placeholderPrefix = "__placeholder__"
+    public static func placeholder(forProject project: String, cwd: String) -> ChatSession {
+        ChatSession(sessionId: placeholderPrefix + project, cwd: cwd, project: project,
+                    label: "(no chats yet — ⌘N to start)", state: .cold,
+                    kind: nil, pid: nil, lastActive: .distantPast)
+    }
+    public var isPlaceholder: Bool { sessionId.hasPrefix(Self.placeholderPrefix) }
 }
 
 /// A currently-running session, read from ~/.claude/sessions/<pid>.json.
