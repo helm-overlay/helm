@@ -199,10 +199,10 @@ private struct SessionRow: View {
 /// behavior encodes state — it circles for `liveBusy` (motion == alive now), parks at
 /// 9 o'clock for `liveIdle`, and is gone (ring goes dashed) for `cold`. An idle session
 /// that's waiting on the user (`needsInput`) parks in amber and pings a sonar ring
-/// outward; an idle session that finished cleanly (`needsReview`) parks in violet while a
-/// comet arc sweeps the ring (a calm "lighthouse", says "ready to review").
+/// outward; an idle session that finished cleanly (`needsReview`) parks in violet while the
+/// ring draws itself to a full circle and holds (a progress ring at 100%, says "ready to review").
 /// Transitions glide/fade rather than snap. Reduce-motion parks busy at the top and
-/// holds the knock/sweep steady.
+/// holds the knock/fill steady.
 ///
 /// Busy rotation is a pure function of one shared wall clock, so every running session's
 /// orbit holds the same phase — the synced field reads as one calm hum (common fate),
@@ -274,16 +274,32 @@ private struct OrbitIndicator: View {
     }
     private var satellitePoint: CGPoint { point(forAngle: spin) }
 
-    /// `needsReview` motion: a short comet arc sweeps the ring track on a calm ~2.8s loop —
-    /// a "lighthouse" that says "done, come look" without the urgency of the amber sonar.
-    private func sweepArc(_ color: Color) -> some View {
+    /// `needsReview` motion: the ring track draws itself from the parked dot around to a
+    /// full circle (a progress ring hitting 100%), holds, then fades and refills on a calm
+    /// ~2.6s loop. It completes in place rather than circulating, so it reads as "finished,
+    /// ready to review" — not the perpetual travel of the busy orbit.
+    private func fillArc(_ color: Color) -> some View {
         TimelineView(.animation) { ctx in
-            let p = (ctx.date.timeIntervalSinceReferenceDate / 2.8).truncatingRemainder(dividingBy: 1)
+            let phase = Self.fillPhase(at: ctx.date)
             Circle()
-                .trim(from: 0, to: 0.16)
-                .stroke(color.opacity(0.85), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
-                .rotationEffect(.degrees(p * 360))
+                .trim(from: 0, to: phase.end)
+                .stroke(color.opacity(0.85 * phase.fade), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+                .rotationEffect(.degrees(Self.park))   // start the fill at the parked dot (9 o'clock)
                 .frame(width: 13, height: 13)
+        }
+    }
+
+    /// Ring-fill progress at `date`: arc end (0→1) and stroke fade, on a ~2.6s loop —
+    /// race up to 100%, hold, then fade the full ring out before the next refill.
+    private static func fillPhase(at date: Date) -> (end: Double, fade: Double) {
+        let p = (date.timeIntervalSinceReferenceDate / 2.6).truncatingRemainder(dividingBy: 1)
+        if p < 0.46 {
+            let t = p / 0.46
+            return (1 - pow(1 - t, 2), 1)
+        } else if p < 0.72 {
+            return (1, 1)
+        } else {
+            return (1, 1 - (p - 0.72) / 0.28)
         }
     }
 
@@ -318,9 +334,9 @@ private struct OrbitIndicator: View {
                 .position(satellitePoint)
             }
         } else if review && !reduceMotion {
-            // Lighthouse sweep: parked violet dot + a comet arc tracking the ring.
+            // Ring-fill: parked violet dot + the track drawing itself to 100% and holding.
             ZStack {
-                sweepArc(color)
+                fillArc(color)
                 dot(color, glowing: glowing).position(satellitePoint)
             }
         } else {
