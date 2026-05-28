@@ -129,96 +129,59 @@ public struct ProjectCreator {
 
     /// Creates the project root + template + per-repo worktrees. Best-effort across repos:
     /// each worktree is attempted independently; the project root is NOT rolled back on
-    /// per-repo failures.
+    /// per-repo failures. Delegates to ProjectManager so the UI and the CLI share logic.
     public func create(name: String, repos: [RepoSpec]) throws -> Outcome {
+        // Collision check before delegating, to preserve the `.collides` semantic surfaced to the UI.
         let nameStatus = validateName(name)
         guard nameStatus == .ok else { throw CreateError.invalidName(nameStatus) }
-        guard fm.fileExists(atPath: templateDir.path) else {
-            throw CreateError.templateMissing(templateDir)
-        }
 
-        let projectRoot = projectsRoot.appendingPathComponent(name)
-        do {
-            try fm.copyItem(at: templateDir, to: projectRoot)
-        } catch {
-            throw CreateError.copyFailed("\(error)")
-        }
+        let mgr = ProjectManager(home: home,
+                                 projectsRoot: projectsRoot,
+                                 templateDir: templateDir,
+                                 repoRoots: [reposRoot],
+                                 runner: runner,
+                                 fm: fm)
 
-        let projectMd = projectRoot.appendingPathComponent("PROJECT.md")
-        if fm.fileExists(atPath: projectMd.path) {
-            do {
-                let original = try String(contentsOf: projectMd, encoding: .utf8)
-                let replaced = original.replacingOccurrences(of: "<project-name>", with: name)
-                try replaced.write(to: projectMd, atomically: true, encoding: .utf8)
-            } catch {
-                throw CreateError.tokenReplaceFailed("\(error)")
-            }
+        let projectRoot: URL
+        switch mgr.newProject(name: name) {
+        case .success(let url):
+            projectRoot = url
+        case .failure(.invalidName(let v)):
+            throw CreateError.invalidName(v)
+        case .failure(.templateMissing(let url)):
+            throw CreateError.templateMissing(url)
+        case .failure(.alreadyExists):
+            throw CreateError.invalidName(.collides)
+        case .failure(.copyFailed(let msg)):
+            throw CreateError.copyFailed(msg)
+        case .failure(.tokenReplaceFailed(let msg)):
+            throw CreateError.tokenReplaceFailed(msg)
         }
 
         let results: [(spec: RepoSpec, result: RepoResult)] = repos.map { spec in
-            (spec, attachWorktree(spec: spec, projectRoot: projectRoot))
+            let target = projectRoot
+                .appendingPathComponent(spec.repo)
+                .appendingPathComponent(spec.branch)
+            let source = reposRoot.appendingPathComponent(spec.repo)
+            guard fm.fileExists(atPath: source.path) else {
+                return (spec, .failed(message: "repo not found at \(source.path)"))
+            }
+            switch mgr.addWorktree(source: source, target: target, branch: spec.branch) {
+            case .success(let r):
+                return (spec, .success(branch: spec.branch,
+                                       createdBranch: !r.attachedExisting,
+                                       base: r.base))
+            case .failure(.noBaseBranch):
+                return (spec, .failed(message: "no master or main branch found to base \(spec.branch) on"))
+            case .failure(.gitFailed(let msg)):
+                return (spec, .failed(message: msg))
+            case .failure(.targetAlreadyExists(let url)):
+                return (spec, .failed(message: "target already exists at \(url.path)"))
+            case .failure(.sourceNotGitWorkingTree(let url)):
+                return (spec, .failed(message: "source is not a git working tree: \(url.path)"))
+            }
         }
         return Outcome(projectRoot: projectRoot, repos: results)
-    }
-
-    // MARK: Worktree
-
-    private func attachWorktree(spec: RepoSpec, projectRoot: URL) -> RepoResult {
-        let repoPath = reposRoot.appendingPathComponent(spec.repo)
-        guard fm.fileExists(atPath: repoPath.path) else {
-            return .failed(message: "repo not found at \(repoPath.path)")
-        }
-
-        let targetDir = projectRoot
-            .appendingPathComponent(spec.repo)
-            .appendingPathComponent(spec.branch)
-        do {
-            try fm.createDirectory(at: targetDir.deletingLastPathComponent(),
-                                   withIntermediateDirectories: true)
-        } catch {
-            return .failed(message: "couldn't prepare \(targetDir.deletingLastPathComponent().path): \(error)")
-        }
-
-        let branchExists = runner.run("/usr/bin/env",
-                                      ["git", "rev-parse", "--verify", "--quiet", spec.branch],
-                                      repoPath.path).status == 0
-
-        if branchExists {
-            let r = runner.run("/usr/bin/env",
-                               ["git", "worktree", "add", targetDir.path, spec.branch],
-                               repoPath.path)
-            if r.status == 0 {
-                return .success(branch: spec.branch, createdBranch: false, base: nil)
-            }
-            return .failed(message: errMsg(r))
-        }
-
-        guard let base = pickBase(repoPath: repoPath) else {
-            return .failed(message: "no master or main branch found to base \(spec.branch) on")
-        }
-        let r = runner.run("/usr/bin/env",
-                           ["git", "worktree", "add", "-b", spec.branch, targetDir.path, base],
-                           repoPath.path)
-        if r.status == 0 {
-            return .success(branch: spec.branch, createdBranch: true, base: base)
-        }
-        return .failed(message: errMsg(r))
-    }
-
-    /// Prefer `master` (most BrowserStack-internal repos), fall back to `main`.
-    private func pickBase(repoPath: URL) -> String? {
-        for cand in ["master", "main"] {
-            let r = runner.run("/usr/bin/env",
-                               ["git", "rev-parse", "--verify", "--quiet", cand],
-                               repoPath.path)
-            if r.status == 0 { return cand }
-        }
-        return nil
-    }
-
-    private func errMsg(_ r: ProcessRunner.Result) -> String {
-        let s = r.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-        return s.isEmpty ? "git exited \(r.status)" : s
     }
 }
 

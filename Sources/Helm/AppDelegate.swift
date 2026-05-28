@@ -54,6 +54,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.reloadInBackground()        // warm both caches so the first summon is instant
         tasksModel.reloadInBackground()
         startReaping()
+
+        // First-run prompt to symlink the bundled `project` CLI onto $PATH.
+        // Self-skipping if already installed, declined, or running unbundled.
+        DispatchQueue.main.async { CLIInstaller.promptOnFirstLaunchIfNeeded() }
     }
 
     private func startReaping() {

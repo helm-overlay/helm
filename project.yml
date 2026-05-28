@@ -27,6 +27,35 @@ targets:
       - path: Sources/Helm
     dependencies:
       - target: HelmCore
+      - target: ProjectCLI
+    postBuildScripts:
+      - name: "Bundle project CLI into Helm.app"
+        script: |
+          set -e
+          src="${BUILT_PRODUCTS_DIR}/project"
+          dst="${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/MacOS/project"
+          if [[ -f "$src" ]]; then
+            mkdir -p "$(dirname "$dst")"
+            cp "$src" "$dst"
+            echo "bundled project CLI at $dst"
+          else
+            echo "warning: $src not found — CLI not bundled"
+          fi
+        inputFiles:
+          - "$(BUILT_PRODUCTS_DIR)/project"
+        outputFiles:
+          - "$(BUILT_PRODUCTS_DIR)/$(PRODUCT_NAME).app/Contents/MacOS/project"
+
+  ProjectCLI:
+    type: tool
+    platform: macOS
+    settings:
+      base:
+        PRODUCT_NAME: project
+    sources:
+      - path: Sources/ProjectCLI
+    dependencies:
+      - target: HelmCore
 
   HelmCore:
     type: library.static
