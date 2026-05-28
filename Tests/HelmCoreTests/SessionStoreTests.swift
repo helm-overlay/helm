@@ -14,6 +14,13 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(SessionStore.project(forCwd: "", home: home), "Other")
     }
 
+    func testSingularChatsOnlyForExactHome() {
+        // ~/Home itself → Singular Chats; subdirs stay in "Other" so they don't pollute the bucket.
+        XCTAssertEqual(SessionStore.project(forCwd: "/Users/me/Home", home: home), SessionStore.singularChatsGroup)
+        XCTAssertEqual(SessionStore.project(forCwd: "/Users/me/Home/dev/repos/foo", home: home), "Other")
+        XCTAssertEqual(SessionStore.project(forCwd: "/Users/me/Home/temp", home: home), "Other")
+    }
+
     // MARK: hook-induced filtering ("my kind of threads only")
 
     func testUserThreadVsAutomation() {
@@ -95,7 +102,7 @@ final class SessionStoreTests: XCTestCase {
 
     func testClassifyDoneWhenProseEndsDeclaratively() {
         let tail = asst("All set — the build passes and tests are green.")
-        XCTAssertEqual(SessionStore.classifyIdleTail(tail), .done)
+        XCTAssertEqual(SessionStore.classifyIdleTail(tail), .needsReview)
     }
 
     func testClassifyNeedsInputWhenLastLineIsAQuestion() {
@@ -113,7 +120,7 @@ final class SessionStoreTests: XCTestCase {
     func testClassifyDoneWhenQuestionIsNotOnTheLastLine() {
         // Deliberate low recall: a question buried above a declarative close reads as done.
         let tail = asst(#"Should I proceed?\nI'll wait for your go-ahead before touching it."#)
-        XCTAssertEqual(SessionStore.classifyIdleTail(tail), .done)
+        XCTAssertEqual(SessionStore.classifyIdleTail(tail), .needsReview)
     }
 
     func testClassifyNeedsInputOnUnansweredToolUse() {
@@ -128,7 +135,7 @@ final class SessionStoreTests: XCTestCase {
             #"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1"}]}}"#,
             asst("Done — ran it and cleaned up."),
         ].joined(separator: "\n")
-        XCTAssertEqual(SessionStore.classifyIdleTail(tail), .done)
+        XCTAssertEqual(SessionStore.classifyIdleTail(tail), .needsReview)
     }
 
     func testClassifyIgnoresTrailingMetadataAndPartialFirstLine() {
@@ -142,12 +149,12 @@ final class SessionStoreTests: XCTestCase {
     }
 
     func testClassifyDoneWhenNoAssistantMessage() {
-        XCTAssertEqual(SessionStore.classifyIdleTail(#"{"type":"user","message":{"role":"user","content":"hi"}}"#), .done)
+        XCTAssertEqual(SessionStore.classifyIdleTail(#"{"type":"user","message":{"role":"user","content":"hi"}}"#), .needsReview)
     }
 
     func testIdleReasonFromHookState() {
         XCTAssertEqual(SessionStore.idleReason(fromState: "needs_input"), .needsInput)
-        XCTAssertEqual(SessionStore.idleReason(fromState: "done"), .done)
+        XCTAssertEqual(SessionStore.idleReason(fromState: "done"), .needsReview)
         XCTAssertNil(SessionStore.idleReason(fromState: "needsInput"))   // not the hook's spelling
         XCTAssertNil(SessionStore.idleReason(fromState: nil))
     }
@@ -219,11 +226,11 @@ final class SessionStoreTests: XCTestCase {
         let rows = [row("A", .liveBusy, pid: 1), row("B", .liveBusy, pid: 2)]
         // A is now idle; B has exited (gone from the registry).
         let live = [LiveRecord(pid: 1, sessionId: "A", kind: "interactive", status: "idle", name: nil)]
-        let (out, new) = SessionStore.reconcileLive(rows, live: live) { _ in .done }
+        let (out, new) = SessionStore.reconcileLive(rows, live: live) { _ in .needsReview }
 
         XCTAssertFalse(new)
         XCTAssertEqual(out.first { $0.sessionId == "A" }!.state, .liveIdle)
-        XCTAssertEqual(out.first { $0.sessionId == "A" }!.idleReason, .done)
+        XCTAssertEqual(out.first { $0.sessionId == "A" }!.idleReason, .needsReview)
         let b = out.first { $0.sessionId == "B" }!
         XCTAssertEqual(b.state, .cold)
         XCTAssertNil(b.pid)
@@ -263,10 +270,12 @@ final class SessionStoreTests: XCTestCase {
         let s1 = ChatSession(sessionId: "1", cwd: "", project: "alpha", label: "cold-new", state: .cold, kind: nil, pid: nil, lastActive: Date(timeIntervalSince1970: 200))
         let s2 = ChatSession(sessionId: "2", cwd: "", project: "alpha", label: "live-old", state: .liveIdle, kind: "bg", pid: 5, lastActive: Date(timeIntervalSince1970: 100))
         let s3 = ChatSession(sessionId: "3", cwd: "", project: "Other", label: "x", state: .cold, kind: nil, pid: nil, lastActive: Date())
-        let groups = SessionStore.group([s1, s2, s3])
+        let s4 = ChatSession(sessionId: "4", cwd: "", project: SessionStore.singularChatsGroup, label: "singular", state: .liveIdle, kind: nil, pid: 9, lastActive: Date())
+        let groups = SessionStore.group([s1, s2, s3, s4])
 
-        XCTAssertEqual(groups.map(\.project), ["alpha", "Other"])     // Other last
-        XCTAssertEqual(groups[0].sessions.map(\.label), ["live-old", "cold-new"]) // live first
+        // Singular Chats first (launchpad), then real projects alphabetical, Other last.
+        XCTAssertEqual(groups.map(\.project), [SessionStore.singularChatsGroup, "alpha", "Other"])
+        XCTAssertEqual(groups[1].sessions.map(\.label), ["live-old", "cold-new"]) // live first within a real project
     }
 
     func testGroupIncludesEmptyProjectsFromDisk() {
@@ -276,6 +285,108 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(groups.map(\.project), ["alpha", "bravo"])
         XCTAssertEqual(groups[0].sessions.map(\.sessionId), ["1"])    // existing rows preserved
         XCTAssertEqual(groups[1].sessions, [])                         // empty group rendered
+    }
+
+    // MARK: attention ordering (needs-input / needs-review float to the top)
+
+    private func idle(_ id: String, _ reason: IdleReason?, age: TimeInterval = 0) -> ChatSession {
+        ChatSession(sessionId: id, cwd: "", project: "p", label: id, state: .liveIdle,
+                    kind: "interactive", pid: 1, lastActive: Date(timeIntervalSince1970: 1000 + age),
+                    idleReason: reason)
+    }
+
+    func testAttentionRankOrder() {
+        XCTAssertEqual(SessionStore.attentionRank(idle("a", .needsInput)), 0)
+        XCTAssertEqual(SessionStore.attentionRank(idle("b", .needsReview)), 1)
+        XCTAssertEqual(SessionStore.attentionRank(idle("c", nil)), 1)        // unclassified idle reads as review
+        XCTAssertEqual(SessionStore.attentionRank(row("d", .liveBusy, pid: 2)), 2)
+        XCTAssertEqual(SessionStore.attentionRank(row("e", .cold)), 3)
+    }
+
+    func testGroupSortsAttentionFirstThenRecency() {
+        // A needs-input row that's the OLDEST must still sort above a fresh busy one — the
+        // whole point of the attention rank (so it never sinks into the collapsed tail).
+        let busyFresh = ChatSession(sessionId: "busy", cwd: "", project: "p", label: "busy",
+            state: .liveBusy, kind: "interactive", pid: 9, lastActive: Date(timeIntervalSince1970: 9999))
+        let needsYou = idle("needs", .needsInput, age: -500)
+        let reviewOld = idle("rev1", .needsReview, age: 10)
+        let reviewNew = idle("rev2", .needsReview, age: 20)
+        let cold = ChatSession(sessionId: "cold", cwd: "", project: "p", label: "cold",
+            state: .cold, kind: nil, pid: nil, lastActive: Date(timeIntervalSince1970: 99999))
+        let groups = SessionStore.group([cold, busyFresh, reviewOld, needsYou, reviewNew])
+        XCTAssertEqual(groups[0].sessions.map(\.sessionId), ["needs", "rev2", "rev1", "busy", "cold"])
+    }
+
+    func testNextAttentionSessionCyclesNeedsInputThenReview() {
+        let rows = [row("busy", .liveBusy, pid: 1), idle("rev", .needsReview),
+                    idle("ask", .needsInput), row("cold", .cold)]
+        XCTAssertEqual(SessionStore.nextAttentionSession(in: rows, after: nil)?.sessionId, "ask")
+        XCTAssertEqual(SessionStore.nextAttentionSession(in: rows, after: "ask")?.sessionId, "rev")
+        XCTAssertEqual(SessionStore.nextAttentionSession(in: rows, after: "rev")?.sessionId, "ask")
+    }
+
+    func testNextAttentionSessionNilWhenNothingWantsYou() {
+        let rows = [row("busy", .liveBusy, pid: 1), row("cold", .cold)]
+        XCTAssertNil(SessionStore.nextAttentionSession(in: rows, after: nil))
+    }
+
+    // MARK: history cache (mtime-keyed, skips re-parsing unchanged transcripts)
+
+    func testHistoryCacheReusesUntilMtimeChanges() {
+        let cache = HistoryCache()
+        var builds = 0
+        let make: () -> HistoryRecord = {
+            builds += 1
+            return HistoryRecord(sessionId: "s", cwd: "/x", gitBranch: nil, aiTitle: nil, lastActive: .distantPast)
+        }
+        let t0 = Date(timeIntervalSince1970: 100), t1 = Date(timeIntervalSince1970: 200)
+        _ = cache.record(forPath: "/a.jsonl", mtime: t0, build: make)
+        _ = cache.record(forPath: "/a.jsonl", mtime: t0, build: make)   // same mtime → cached
+        XCTAssertEqual(builds, 1)
+        _ = cache.record(forPath: "/a.jsonl", mtime: t1, build: make)   // newer mtime → rebuild
+        XCTAssertEqual(builds, 2)
+        _ = cache.record(forPath: "/b.jsonl", mtime: t0, build: make)   // new path → build
+        XCTAssertEqual(builds, 3)
+    }
+
+    // MARK: filesystem readers (against a temp ~/.claude fixture)
+
+    func testReadLiveAndHistoryFromTempClaudeDir() throws {
+        let fm = FileManager.default
+        let home = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("helm-ss-\(UUID())")
+        defer { try? fm.removeItem(at: home) }
+        let sessions = home.appendingPathComponent(".claude/sessions")
+        let projects = home.appendingPathComponent(".claude/projects/proj")
+        try fm.createDirectory(at: sessions, withIntermediateDirectories: true)
+        try fm.createDirectory(at: projects, withIntermediateDirectories: true)
+
+        // Use our own pid so the liveness check (kill(pid,0)) sees it as alive.
+        let myPid = ProcessInfo.processInfo.processIdentifier
+        try #"{"pid":\#(myPid),"sessionId":"S1","kind":"interactive","status":"busy","entrypoint":"cli","name":"live one"}"#
+            .write(to: sessions.appendingPathComponent("\(myPid).json"), atomically: true, encoding: .utf8)
+
+        // JSONL: each record is newline-terminated (the head reader only collects whole lines).
+        let demo = "\(home.path)/projects/demo"
+        try (#"{"cwd":"\#(demo)","gitBranch":"main","aiTitle":"hello","entrypoint":"cli"}"# + "\n")
+            .write(to: projects.appendingPathComponent("S1.jsonl"), atomically: true, encoding: .utf8)
+        try (#"{"cwd":"\#(demo)","gitBranch":"feat","entrypoint":"cli"}"# + "\n")
+            .write(to: projects.appendingPathComponent("S2.jsonl"), atomically: true, encoding: .utf8)
+        try (#"{"cwd":"\#(demo)","entrypoint":"sdk-py"}"# + "\n")   // automation → filtered out
+            .write(to: projects.appendingPathComponent("S3.jsonl"), atomically: true, encoding: .utf8)
+
+        let store = SessionStore(home: home.path)
+        XCTAssertEqual(store.readLive().map(\.sessionId), ["S1"])
+        XCTAssertEqual(store.readLive().first?.status, "busy")
+
+        let history = store.readHistory()
+        XCTAssertEqual(Set(history.map(\.sessionId)), ["S1", "S2"])   // S3 (sdk-py) excluded
+
+        let merged = store.merge(live: store.readLive(), history: history)
+        let s1 = merged.first { $0.sessionId == "S1" }!
+        XCTAssertEqual(s1.state, .liveBusy)
+        XCTAssertEqual(s1.label, "live one")          // live name wins over aiTitle
+        XCTAssertEqual(s1.project, "demo")
+        XCTAssertEqual(merged.first { $0.sessionId == "S2" }?.state, .cold)
     }
 
     // MARK: search

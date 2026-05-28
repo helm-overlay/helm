@@ -57,6 +57,7 @@ let helpEpilog = """
 examples:
   project new helm-redesign           Create a new project from template
   project add helm bug-fix            Add helm@bug-fix as a worktree (bare name)
+  project add helm                    Same, branch defaults to the project name
   project add ~/some/checkout fix     Same, by path
   project ls                          List worktrees in current project
                                       (or all projects if outside)
@@ -82,7 +83,7 @@ usage: project <command> [args]
 
 \(bold("commands:"))
   new <name>                 create a new project from template
-  add <repo> <branch>        add a repo+branch as a worktree
+  add <repo> [<branch>]      add a repo+branch as a worktree (branch defaults to project name)
   ls [-a]                    list worktrees (or all projects if outside)
   show                       print current project's summary
   rm [<repo>/<branch>] [-f]  remove a worktree
@@ -167,12 +168,12 @@ func describeNameError(_ v: ProjectCreator.NameValidation) -> String {
 // MARK: add
 
 func cmdAdd(_ args: [String]) {
-    guard args.count == 2 else { die("usage: project add <repo> <branch>") }
+    guard args.count == 1 || args.count == 2 else { die("usage: project add <repo> [<branch>]") }
     let repoArg = args[0]
-    let branch = args[1]
-    if branch.contains("/") { die("branch name '\(branch)' may not contain '/'") }
 
     let projectRoot = requireProjectRoot()
+    let branch = args.count == 2 ? args[1] : projectRoot.lastPathComponent
+    if branch.contains("/") { die("branch name '\(branch)' may not contain '/'") }
 
     let resolution: ProjectManager.RepoResolution
     switch mgr.resolveRepo(repoArg, projectRoot: projectRoot) {

@@ -303,26 +303,3 @@ private struct ArchiveHeader: View {
     }
 }
 
-private extension AnyTransition {
-    static var rowEnterLeave: AnyTransition {
-        .asymmetric(insertion: .move(edge: .top).combined(with: .opacity),
-                    removal: .move(edge: .bottom).combined(with: .opacity))
-    }
-}
-
-/// Same blinking caret the sessions view uses. Duplicated here to avoid making
-/// `OverlayView`'s private struct part of the public surface — both views need it,
-/// but only at the leaf level, so the local-private copy is the cheaper coupling.
-private struct BlinkingCursor: View {
-    let anchor: Date
-    private let period = 0.53
-    var body: some View {
-        TimelineView(.periodic(from: anchor, by: period)) { ctx in
-            let on = Int(ctx.date.timeIntervalSince(anchor) / period) % 2 == 0
-            RoundedRectangle(cornerRadius: 1)
-                .fill(Color.primary)
-                .frame(width: 2, height: 18)
-                .opacity(on ? 1 : 0)
-        }
-    }
-}

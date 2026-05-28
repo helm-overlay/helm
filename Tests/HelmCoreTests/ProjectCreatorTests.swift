@@ -169,6 +169,35 @@ final class ProjectCreatorTests: XCTestCase {
         guard case .success = outcome.repos[1].result else { return XCTFail("expected success") }
     }
 
+    func testCreateResolvesRepoFromUtilsRoot() throws {
+        // The bug this fixes: a repo that lives only in ~/Home/dev/utils (e.g. helm itself)
+        // must be reachable from the GUI form, not just the CLI.
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        try FileManager.default.createDirectory(at: env.utilsRoot.appendingPathComponent("helm"),
+                                                withIntermediateDirectories: true)
+        var worktreeCwd: String?
+        env.installRunner { _, args, cwd in
+            if args[1] == "rev-parse" && args.last == "feat"   { return .init(status: 1) }  // new branch
+            if args[1] == "rev-parse" && args.last == "master" { return .init(status: 0) }
+            if args[1] == "worktree" { worktreeCwd = cwd; return .init(status: 0) }
+            return .init(status: 1)
+        }
+        let outcome = try env.creator.create(name: "demo", repos: [.init(repo: "helm", branch: "feat")])
+        XCTAssertTrue(outcome.allSucceeded)
+        XCTAssertEqual(worktreeCwd, env.utilsRoot.appendingPathComponent("helm").path)
+    }
+
+    func testListAvailableReposUnionsRootsFirstWins() throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let fm = FileManager.default
+        try fm.createDirectory(at: env.reposRoot.appendingPathComponent("mobile"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: env.utilsRoot.appendingPathComponent("helm"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: env.utilsRoot.appendingPathComponent("mobile"), withIntermediateDirectories: true) // dup
+        XCTAssertEqual(env.creator.listAvailableRepos(), ["helm", "mobile"])   // deduped, sorted
+    }
+
     func testMissingRepoReportedPerRow() throws {
         let env = try makeEnv(repos: ["mobile"])
         defer { env.cleanup() }
@@ -187,17 +216,19 @@ final class ProjectCreatorTests: XCTestCase {
         let projectsRoot: URL
         let templateDir: URL
         let reposRoot: URL
+        let utilsRoot: URL
         var runner: ProcessRunner
-        init(home: URL, projectsRoot: URL, templateDir: URL, reposRoot: URL) {
+        init(home: URL, projectsRoot: URL, templateDir: URL, reposRoot: URL, utilsRoot: URL) {
             self.home = home
             self.projectsRoot = projectsRoot
             self.templateDir = templateDir
             self.reposRoot = reposRoot
+            self.utilsRoot = utilsRoot
             self.runner = ProcessRunner { _, _, _ in .init(status: 0) }
         }
         var creator: ProjectCreator {
             ProjectCreator(home: home.path, projectsRoot: projectsRoot,
-                           templateDir: templateDir, reposRoot: reposRoot,
+                           templateDir: templateDir, repoRoots: [reposRoot, utilsRoot],
                            runner: runner)
         }
         func installRunner(_ fn: @escaping (String, [String], String?) -> ProcessRunner.Result) {
@@ -215,8 +246,10 @@ final class ProjectCreatorTests: XCTestCase {
         let projectsRoot = home.appendingPathComponent("projects")
         let templateDir = projectsRoot.appendingPathComponent(".template")
         let reposRoot = home.appendingPathComponent("Home/dev/repos")
+        let utilsRoot = home.appendingPathComponent("Home/dev/utils")
         try fm.createDirectory(at: projectsRoot, withIntermediateDirectories: true)
         try fm.createDirectory(at: reposRoot, withIntermediateDirectories: true)
+        try fm.createDirectory(at: utilsRoot, withIntermediateDirectories: true)
         if makeTemplate {
             try fm.createDirectory(at: templateDir, withIntermediateDirectories: true)
             try "# <project-name>\n\nA brief here.\n"
@@ -229,6 +262,7 @@ final class ProjectCreatorTests: XCTestCase {
         for r in repos {
             try fm.createDirectory(at: reposRoot.appendingPathComponent(r), withIntermediateDirectories: true)
         }
-        return Env(home: home, projectsRoot: projectsRoot, templateDir: templateDir, reposRoot: reposRoot)
+        return Env(home: home, projectsRoot: projectsRoot, templateDir: templateDir,
+                   reposRoot: reposRoot, utilsRoot: utilsRoot)
     }
 }

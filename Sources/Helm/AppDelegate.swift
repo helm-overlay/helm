@@ -16,12 +16,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let tasksModel = TaskListViewModel()
     private var newProjectModel = ProjectCreateViewModel()
     private var hotKey: GlobalHotKey?
+    private var jumpHotKey: GlobalHotKey?
     private var keyMonitor: Any?
     private var reaper: Timer?
 
-    // Summon hotkey: ⌥Space.
+    /// Last session the jump hotkey landed on, so repeated presses cycle through the
+    /// sessions wanting attention rather than re-opening the same one.
+    private var jumpCursor: String?
+
+    // Summon hotkey: ⌥Space. Jump-to-next-attention: ⌥⇧Space.
     private let hotKeyCode = UInt32(kVK_Space)
     private let hotKeyMods = UInt32(optionKey)
+    private let jumpHotKeyMods = UInt32(optionKey | shiftKey)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let root = RootView(
@@ -44,11 +50,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { self?.hide() }
         }
 
-        hotKey = GlobalHotKey(keyCode: hotKeyCode, modifiers: hotKeyMods) { [weak self] in
+        hotKey = GlobalHotKey(keyCode: hotKeyCode, modifiers: hotKeyMods, id: 1) { [weak self] in
             self?.toggle()
         }
         if hotKey == nil {
             NSLog("Helm: failed to register global hotkey (⌥Space may be taken).")
+        }
+
+        // ⌥⇧Space jumps straight to the session that wants you — no list, no scanning.
+        jumpHotKey = GlobalHotKey(keyCode: hotKeyCode, modifiers: jumpHotKeyMods, id: 2) { [weak self] in
+            self?.jumpToNextAttention()
+        }
+        if jumpHotKey == nil {
+            NSLog("Helm: failed to register jump hotkey (⌥⇧Space may be taken).")
         }
 
         model.reloadInBackground()        // warm both caches so the first summon is instant
@@ -107,6 +121,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         TerminalDispatcher.newChat(cwd: cwd?.nonEmpty ?? NSHomeDirectory())
     }
 
+    /// ⌥⇧Space: jump straight to the session that wants you — needs-input first, then
+    /// needs-review — cycling through them on repeated presses. Loads fresh so it works
+    /// with the panel closed; beeps if nothing is waiting on you.
+    private func jumpToNextAttention() {
+        let after = jumpCursor
+        _Concurrency.Task.detached(priority: .userInitiated) {
+            let next = SessionStore.nextAttentionSession(in: SessionStore().load(), after: after)
+            await MainActor.run {
+                guard let next else { NSSound.beep(); return }
+                self.jumpCursor = next.sessionId
+                if self.panel.isVisible { self.hide() }
+                TerminalDispatcher.resume(sessionId: next.sessionId, cwd: next.cwd, pid: next.pid)
+            }
+        }
+    }
+
     /// Open the new-project form over the sessions view. A fresh ViewModel each summon
     /// so the form starts clean (drops any partial state from a previous open).
     private func presentNewProject() {
@@ -157,7 +187,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .jira(_, let u):  url = u
         case .slack(let u):    url = u
         }
-        NSWorkspace.shared.open(URL(string: url)!)
+        guard let parsed = URL(string: url) else {
+            NSLog("Helm: task source URL is unopenable: \(url)")
+            return
+        }
+        NSWorkspace.shared.open(parsed)
     }
 
     // MARK: Key handling (local monitor while visible)

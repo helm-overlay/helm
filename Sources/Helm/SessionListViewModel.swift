@@ -24,6 +24,11 @@ final class SessionListViewModel: ObservableObject {
     private var liveTicker: Timer?
     private var hideOlderThan: TimeInterval = HelmConfig.load().hideOlderThan
 
+    /// Guards `reloadInBackground` so a slow full scan (reads all transcript history) can't
+    /// stack behind rapid re-summons — a later scan landing before an earlier one would
+    /// apply stale data.
+    private var isReloading = false
+
     /// Sessions we've killed but whose process may still be exiting. While a sessionId is
     /// here, every reconcile forces its row to cold — otherwise the per-second live ticker
     /// reads the still-alive process back out of the registry and snaps the row to idle.
@@ -31,7 +36,7 @@ final class SessionListViewModel: ObservableObject {
 
     /// Hard cap on rows shown per project in the default view; the rest collapse into a
     /// "+N older" tail (still reachable by search or by expanding the project).
-    private let perProjectCap = 5
+    private let perProjectCap = 3
 
     /// While the panel is open: advance the age clock every 30s (the "5m ago" labels — no
     /// per-second churn), and re-check live state every 1s so a session flipping
@@ -96,6 +101,8 @@ final class SessionListViewModel: ObservableObject {
     /// Scan the filesystem off the main thread, then apply on main. Cached data stays
     /// visible until the fresh scan lands, so the panel never blocks on I/O.
     func reloadInBackground() {
+        guard !isReloading else { return }
+        isReloading = true
         Task.detached(priority: .userInitiated) {
             let grouped = SessionStore().grouped()
             await self.ingest(grouped)
@@ -103,6 +110,7 @@ final class SessionListViewModel: ObservableObject {
     }
 
     private func ingest(_ grouped: [(project: String, sessions: [ChatSession])]) {
+        isReloading = false
         hideOlderThan = HelmConfig.load().hideOlderThan   // pick up config edits on resummon
         all = SessionStore.group(suppressKilled(grouped.flatMap(\.sessions)),
                                  includeEmpty: store.listProjects())
@@ -249,14 +257,17 @@ final class SessionListViewModel: ObservableObject {
             // Default view is a switcher, not an archive:
             // 1. Legacy "Other" is search-only — it never takes space in the default list.
             if group.project == "Other" { return nil }
-            // 2. Recency cutoff, but a live row is never hidden. An empty result becomes
-            //    a single placeholder row so ⌘N / Enter / arrow-nav has a selectable
-            //    target for the project.
+            // 2. Singular Chats (one-offs in ~/Home) shows live rows only — cold rows here are
+            //    throwaway and only surface via search.
+            let isSingularChats = group.project == SessionStore.singularChatsGroup
             let recent = group.sessions.filter { s in
-                s.isLive || !SessionStore.isOlderThan(hideOlderThan, lastActive: s.lastActive, now: clock)
+                if isSingularChats { return s.isLive }
+                return s.isLive || !SessionStore.isOlderThan(hideOlderThan, lastActive: s.lastActive, now: clock)
             }
             if recent.isEmpty {
-                let cwd = "\(NSHomeDirectory())/projects/\(group.project)"
+                let cwd = isSingularChats
+                    ? "\(NSHomeDirectory())/Home"
+                    : "\(NSHomeDirectory())/projects/\(group.project)"
                 return DisplayGroup(project: group.project,
                                     sessions: [.placeholder(forProject: group.project, cwd: cwd)],
                                     hiddenCount: 0)

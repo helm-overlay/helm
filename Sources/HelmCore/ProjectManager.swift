@@ -4,8 +4,8 @@ import Foundation
 ///   • the `project` CLI (Sources/ProjectCLI)
 ///   • the Mac app's New Project view via `ProjectCreator`
 ///
-/// All process invocations go through `ProcessRunner` (defined in
-/// `ProjectCreator.swift`) so tests can stub git calls.
+/// All process invocations go through `ProcessRunner` (in `ProcessRunner.swift`) so tests
+/// can stub git calls.
 public struct ProjectManager {
     public let home: String
     public let projectsRoot: URL

@@ -10,7 +10,10 @@ public struct ProjectCreator {
     public let home: String
     public let projectsRoot: URL
     public let templateDir: URL
-    public let reposRoot: URL
+    /// Where bare repo names are looked up, in order. Matches the CLI's `ProjectManager`
+    /// roots so the GUI form can reach the same repos the CLI can — notably
+    /// `~/Home/dev/utils` (personal repos, where Helm itself lives).
+    public let repoRoots: [URL]
     public let runner: ProcessRunner
     public let fm: FileManager
 
@@ -18,28 +21,40 @@ public struct ProjectCreator {
                 runner: ProcessRunner = .system,
                 fm: FileManager = .default) {
         self.home = home
-        self.projectsRoot = URL(fileURLWithPath: home).appendingPathComponent("projects")
+        let h = URL(fileURLWithPath: home)
+        self.projectsRoot = h.appendingPathComponent("projects")
         self.templateDir = projectsRoot.appendingPathComponent(".template")
-        self.reposRoot = URL(fileURLWithPath: home).appendingPathComponent("Home/dev/repos")
+        self.repoRoots = [h.appendingPathComponent("Home/dev/repos"),
+                          h.appendingPathComponent("Home/dev/utils")]
         self.runner = runner
         self.fm = fm
     }
 
     /// Override constructor for tests; lets a temp dir stand in for `~`.
-    public init(home: String, projectsRoot: URL, templateDir: URL, reposRoot: URL,
+    public init(home: String, projectsRoot: URL, templateDir: URL, repoRoots: [URL],
                 runner: ProcessRunner, fm: FileManager = .default) {
         self.home = home
         self.projectsRoot = projectsRoot
         self.templateDir = templateDir
-        self.reposRoot = reposRoot
+        self.repoRoots = repoRoots
         self.runner = runner
         self.fm = fm
+    }
+
+    /// First repo root holding a direct-child directory named `repo`, else nil.
+    public func resolveRepoPath(_ repo: String) -> URL? {
+        for root in repoRoots {
+            let p = root.appendingPathComponent(repo)
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: p.path, isDirectory: &isDir), isDir.boolValue { return p }
+        }
+        return nil
     }
 
     // MARK: Inputs
 
     public struct RepoSpec: Equatable {
-        public let repo: String      // direct-child folder name under reposRoot
+        public let repo: String      // direct-child folder name under one of the repo roots
         public let branch: String
         public init(repo: String, branch: String) {
             self.repo = repo
@@ -75,12 +90,11 @@ public struct ProjectCreator {
         return fm.fileExists(atPath: target.path) ? .collides : .ok
     }
 
-    /// Local branches for a direct-child repo. Returns [] if the repo is missing or git
-    /// fails. Sorted; head branch first if detectable. Cheap enough to call per typed key
-    /// — the view-model caches the result anyway.
+    /// Local branches for a repo (resolved across the repo roots). Returns [] if the repo
+    /// is missing or git fails. Sorted. Cheap enough to call per typed key — the view-model
+    /// caches the result anyway.
     public func listBranches(repo: String) -> [String] {
-        let repoPath = reposRoot.appendingPathComponent(repo)
-        guard fm.fileExists(atPath: repoPath.path) else { return [] }
+        guard let repoPath = resolveRepoPath(repo) else { return [] }
         let r = runner.run("/usr/bin/env",
                            ["git", "for-each-ref", "--format=%(refname:short)", "refs/heads/"],
                            repoPath.path)
@@ -92,16 +106,19 @@ public struct ProjectCreator {
             .sorted()
     }
 
-    /// Direct-child folder names under reposRoot, sorted. Skips dotfiles and non-dirs.
+    /// Direct-child folder names across all repo roots, deduped (first root wins) and
+    /// sorted. Skips dotfiles and non-dirs.
     public func listAvailableRepos() -> [String] {
-        guard let entries = try? fm.contentsOfDirectory(at: reposRoot,
-                                                        includingPropertiesForKeys: [.isDirectoryKey],
-                                                        options: [.skipsHiddenFiles])
-        else { return [] }
-        return entries
-            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }
-            .map { $0.lastPathComponent }
-            .sorted()
+        var seen = Set<String>(), out: [String] = []
+        for root in repoRoots {
+            guard let entries = try? fm.contentsOfDirectory(at: root,
+                includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
+            else { continue }
+            for e in entries where (try? e.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                if seen.insert(e.lastPathComponent).inserted { out.append(e.lastPathComponent) }
+            }
+        }
+        return out.sorted()
     }
 
     // MARK: Create
@@ -138,7 +155,7 @@ public struct ProjectCreator {
         let mgr = ProjectManager(home: home,
                                  projectsRoot: projectsRoot,
                                  templateDir: templateDir,
-                                 repoRoots: [reposRoot],
+                                 repoRoots: repoRoots,
                                  runner: runner,
                                  fm: fm)
 
@@ -162,9 +179,8 @@ public struct ProjectCreator {
             let target = projectRoot
                 .appendingPathComponent(spec.repo)
                 .appendingPathComponent(spec.branch)
-            let source = reposRoot.appendingPathComponent(spec.repo)
-            guard fm.fileExists(atPath: source.path) else {
-                return (spec, .failed(message: "repo not found at \(source.path)"))
+            guard let source = resolveRepoPath(spec.repo) else {
+                return (spec, .failed(message: "repo not found: \(spec.repo)"))
             }
             switch mgr.addWorktree(source: source, target: target, branch: spec.branch) {
             case .success(let r):
@@ -182,42 +198,5 @@ public struct ProjectCreator {
             }
         }
         return Outcome(projectRoot: projectRoot, repos: results)
-    }
-}
-
-// MARK: Process runner
-
-/// Thin seam over `Process` so tests can stub git invocations.
-public struct ProcessRunner {
-    public struct Result: Equatable {
-        public let status: Int32
-        public let stdout: String
-        public let stderr: String
-        public init(status: Int32, stdout: String = "", stderr: String = "") {
-            self.status = status; self.stdout = stdout; self.stderr = stderr
-        }
-    }
-
-    public let run: (_ executable: String, _ args: [String], _ cwd: String?) -> Result
-
-    public init(run: @escaping (String, [String], String?) -> Result) {
-        self.run = run
-    }
-
-    public static let system = ProcessRunner { executable, args, cwd in
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: executable)
-        p.arguments = args
-        if let cwd { p.currentDirectoryURL = URL(fileURLWithPath: cwd) }
-        let outPipe = Pipe(), errPipe = Pipe()
-        p.standardOutput = outPipe
-        p.standardError = errPipe
-        do { try p.run() } catch {
-            return Result(status: -1, stderr: "\(error)")
-        }
-        p.waitUntilExit()
-        let out = String(decoding: outPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        let err = String(decoding: errPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        return Result(status: p.terminationStatus, stdout: out, stderr: err)
     }
 }

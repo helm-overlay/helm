@@ -91,13 +91,13 @@ final class ProjectCreateViewModel: ObservableObject {
         }
     }
 
-    /// Empty rows are ignored. Other rows must have both fields filled and a resolvable repo.
+    /// Empty rows are ignored. Other rows need a resolvable repo; branch may be blank
+    /// (defaults to the project name on submit).
     var canSubmit: Bool {
         guard nameStatus == .ok, !isSubmitting else { return false }
         return rows.allSatisfy { row in
-            let blank = row.repo.isEmpty && row.branch.isEmpty
-            let filled = !row.repo.isEmpty && !row.branch.isEmpty && topMatch(forRepo: row.repo) != nil
-            return blank || filled
+            if row.repo.isEmpty && row.branch.isEmpty { return true }
+            return !row.repo.isEmpty && topMatch(forRepo: row.repo) != nil
         }
     }
 
@@ -106,10 +106,12 @@ final class ProjectCreateViewModel: ObservableObject {
     /// so the view can render per-row status).
     func submit() async -> URL? {
         guard canSubmit else { return nil }
+        let projectName = self.name
         let specs: [ProjectCreator.RepoSpec] = rows.compactMap { row in
-            guard !row.repo.isEmpty, !row.branch.isEmpty,
+            guard !row.repo.isEmpty,
                   let resolved = topMatch(forRepo: row.repo) else { return nil }
-            return ProjectCreator.RepoSpec(repo: resolved, branch: row.branch)
+            let branch = row.branch.isEmpty ? projectName : row.branch
+            return ProjectCreator.RepoSpec(repo: resolved, branch: branch)
         }
 
         isSubmitting = true

@@ -108,6 +108,7 @@ struct ProjectCreateView: View {
                 let repoMatch = model.topMatch(forRepo: row.repo)
                 let branchMatch = model.topMatch(forBranch: row.branch, resolvedRepo: repoMatch)
                 RepoRow(row: $row,
+                        projectName: model.name,
                         repoSuggestions: model.availableRepos,
                         repoTopMatch: repoMatch,
                         branchSuggestions: model.branches[repoMatch ?? ""] ?? [],
@@ -134,7 +135,7 @@ struct ProjectCreateView: View {
         guard !model.results.isEmpty,
               let idx = model.rows.firstIndex(where: { $0.id == rowId }) else { return nil }
         let nonBlankIndices = model.rows.enumerated()
-            .filter { !$0.element.repo.isEmpty && !$0.element.branch.isEmpty }
+            .filter { !$0.element.repo.isEmpty }
             .map { $0.offset }
         guard let resultIdx = nonBlankIndices.firstIndex(of: idx),
               resultIdx < model.results.count else { return nil }
@@ -187,6 +188,7 @@ struct ProjectCreateView: View {
 /// branch name is the create-new path and gets no hint).
 private struct RepoRow: View {
     @Binding var row: ProjectCreateViewModel.Row
+    let projectName: String
     let repoSuggestions: [String]
     let repoTopMatch: String?
     let branchSuggestions: [String]
@@ -214,7 +216,7 @@ private struct RepoRow: View {
                     }
                 Text("/").foregroundStyle(.tertiary)
                 PanelTextField(text: $row.branch,
-                               placeholder: "branch",
+                               placeholder: projectName.isEmpty ? "branch" : projectName,
                                fontSize: 14,
                                onTab: { acceptBranch() },
                                onReturn: { onSubmit(); return true })
@@ -287,7 +289,7 @@ private struct RepoRow: View {
         if row.repo.isEmpty { return nil }
         if repoSuggestions.contains(row.repo) { return nil }
         if let m = repoTopMatch { return "↹ \(m)" }
-        return "no matching repo under ~/Home/dev/repos"
+        return "no matching repo under ~/Home/dev/{repos,utils}"
     }
 
     private func branchHint() -> String? {

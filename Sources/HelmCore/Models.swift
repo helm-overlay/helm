@@ -7,14 +7,14 @@ public enum SessionState: String, Equatable {
     case cold       // no live process; resumable      → dashed ring
 }
 
-/// Why a `liveIdle` session stopped — distinguishes "waiting on me" from "done".
-/// Derived from the transcript tail (see `SessionStore.classifyIdleTail`). Structural
-/// signals (an unanswered question/permission) are high-confidence; the trailing-"?"
-/// check is high-precision but low-recall, so `done` is "nothing pending that we can
-/// detect", not a guarantee of completion.
+/// Why a `liveIdle` session stopped — distinguishes "waiting on me" from "ready for me
+/// to look". Derived from the transcript tail (see `SessionStore.classifyIdleTail`).
+/// Structural signals (an unanswered question/permission) are high-confidence; the
+/// trailing-"?" check is high-precision but low-recall, so `needsReview` is "nothing
+/// pending that we can detect", not a guarantee of completion.
 public enum IdleReason: String, Equatable {
     case needsInput   // ended awaiting the user (decision / permission / a question)
-    case done         // concluded with nothing detectably pending
+    case needsReview  // concluded with nothing detectably pending — done, come look
 }
 
 /// One row in the overlay: a Claude session, live or historical, joined on `sessionId`.
@@ -33,6 +33,8 @@ public struct ChatSession: Identifiable, Equatable {
     public var id: String { sessionId }
     public var isLive: Bool { state != .cold }
     public var needsInput: Bool { state == .liveIdle && idleReason == .needsInput }
+    /// Idle and finished (or pending classification) — done, ready for you to review.
+    public var needsReview: Bool { state == .liveIdle && idleReason != .needsInput }
 
     public init(sessionId: String, cwd: String, project: String, label: String,
                 state: SessionState, kind: String?, pid: Int32?, lastActive: Date,

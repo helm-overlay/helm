@@ -21,15 +21,23 @@ design decisions.
 
 ## Session status & needs-input classification
 
-Each row's orbit indicator encodes state: **busy** orbits, **idle** parks at 9 o'clock,
-**dead** dashes the ring, and **needs-input** (an idle session waiting on *you*) parks
-amber and pulses. Idle is split into needs-input vs done two ways:
+Each row's orbit indicator encodes state: **busy** orbits, **dead** dashes the ring, and
+the two idle states each get their own motion — **needs-input** (idle, waiting on *you*)
+parks amber and pings a sonar ring; **needs-review** (idle, finished, come look) parks
+violet under a calm "lighthouse" comet arc sweeping the ring. Idle is split into
+needs-input vs needs-review two ways:
 
 1. **In-process (always on, fallback):** `SessionStore.classifyIdleTail` reads the
    transcript tail — an unanswered `tool_use` or a final line ending in `?` → needs-input.
    High precision, low recall.
 2. **Haiku Stop hook (recall lift):** a classification verdict written to
-   `~/.helm/state/<sessionId>.json`, which `load()` prefers when present.
+   `~/.helm/state/<sessionId>.json`, which `load()` prefers when present. (The wire format
+   predates the rename, so the hook still writes `"done"`; it maps to `needsReview`.)
+
+**Attention-first.** Rows sort by `SessionStore.attentionRank` (needs-input → needs-review
+→ busy → cold) so the session that wants you never sinks below busier rows or into the
+collapsed tail. **⌥⇧Space** jumps straight to the next such session (`nextAttentionSession`,
+cycling) without even opening the panel — the summon hotkey is **⌥Space**.
 
 > **The hooks live in `~/.claude/settings.json`, NOT in this repo** (Claude Code config,
 > per-machine). To reproduce on another machine, add these to `settings.json` → `hooks`:

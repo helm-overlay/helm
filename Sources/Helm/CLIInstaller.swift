@@ -5,12 +5,11 @@ import Foundation
 /// a `~/.local/bin/project` symlink so the CLI is on $PATH. Designed to be
 /// safe to call repeatedly and to never block app startup on its own.
 ///
-/// Three entry points:
+/// Two entry points:
 ///   • `promptOnFirstLaunchIfNeeded()` — call once after launch; shows an alert
 ///      if we've never asked and the symlink doesn't yet exist.
-///   • `installFromUI()`              — performs the symlink, surfaces an alert.
-///   • `bundledCLIPath`               — Helm.app/Contents/MacOS/project, used by
-///      future UI affordances and as the symlink target.
+///   • `bundledCLIPath`               — Helm.app/Contents/MacOS/project, used as the
+///      symlink target.
 @MainActor
 enum CLIInstaller {
     /// `Helm.app/Contents/MacOS/project`. nil if the binary isn't in the bundle
@@ -68,7 +67,7 @@ enum CLIInstaller {
         let response = alert.runModal()
         switch response {
         case .alertFirstButtonReturn:
-            performInstall(bundled: bundled, symlink: symlinkPath, surface: .alert)
+            performInstall(bundled: bundled, symlink: symlinkPath)
             FileManager.default.createFile(atPath: didAskMarker.path, contents: Data())
         case .alertSecondButtonReturn:
             return  // ask again next launch
@@ -78,30 +77,13 @@ enum CLIInstaller {
         }
     }
 
-    /// For a future UI affordance (e.g. a button in the overlay): always performs
-    /// the install and shows the result as an alert.
-    static func installFromUI() {
-        guard let bundled = bundledCLIPath else {
-            showAlert("CLI not bundled",
-                      info: "The `project` binary wasn't found inside Helm.app. " +
-                            "Rebuild and try again.")
-            return
-        }
-        performInstall(bundled: bundled, symlink: symlinkPath, surface: .alert)
-    }
-
-    private enum Surface { case alert, silent }
-
-    private static func performInstall(bundled: URL, symlink target: URL, surface: Surface) {
+    private static func performInstall(bundled: URL, symlink target: URL) {
         let fm = FileManager.default
         do {
             try fm.createDirectory(at: target.deletingLastPathComponent(),
                                    withIntermediateDirectories: true)
         } catch {
-            if surface == .alert {
-                showAlert("Could not create \(target.deletingLastPathComponent().path)",
-                          info: "\(error)")
-            }
+            showAlert("Could not create \(target.deletingLastPathComponent().path)", info: "\(error)")
             return
         }
         // Remove anything (file or symlink) sitting at the target path.
@@ -112,16 +94,12 @@ enum CLIInstaller {
         do {
             try fm.createSymbolicLink(at: target, withDestinationURL: bundled)
         } catch {
-            if surface == .alert {
-                showAlert("Could not create symlink", info: "\(error)")
-            }
+            showAlert("Could not create symlink", info: "\(error)")
             return
         }
-        if surface == .alert {
-            showAlert("`project` CLI installed",
-                      info: "Symlinked \(target.path) → \(bundled.path).\n" +
-                            "Make sure \(target.deletingLastPathComponent().path) is on your PATH.")
-        }
+        showAlert("`project` CLI installed",
+                  info: "Symlinked \(target.path) → \(bundled.path).\n" +
+                        "Make sure \(target.deletingLastPathComponent().path) is on your PATH.")
     }
 
     private static func showAlert(_ title: String, info: String) {

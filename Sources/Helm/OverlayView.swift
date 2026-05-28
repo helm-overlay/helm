@@ -58,7 +58,7 @@ struct OverlayView: View {
     private var list: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2, pinnedViews: [.sectionHeaders]) {
+                LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(model.groups) { group in
                         Section {
                             ForEach(group.sessions) { session in
@@ -126,31 +126,6 @@ struct OverlayView: View {
     }
 }
 
-private extension AnyTransition {
-    /// New rows drop in from above and fade up; rows leaving the visible set — e.g. the
-    /// 5th row pushed behind the "+N older" tail — slide down and fade out behind it.
-    static var rowEnterLeave: AnyTransition {
-        .asymmetric(insertion: .move(edge: .top).combined(with: .opacity),
-                    removal: .move(edge: .bottom).combined(with: .opacity))
-    }
-}
-
-/// A vertical-bar insertion caret that blinks on a fixed cadence, phased so it is
-/// solid-on at `anchor` (the last edit) — the caret never blinks off mid-keystroke.
-private struct BlinkingCursor: View {
-    let anchor: Date
-    private let period = 0.53
-    var body: some View {
-        TimelineView(.periodic(from: anchor, by: period)) { ctx in
-            let on = Int(ctx.date.timeIntervalSince(anchor) / period) % 2 == 0
-            RoundedRectangle(cornerRadius: 1)
-                .fill(Color.primary)
-                .frame(width: 2, height: 18)
-                .opacity(on ? 1 : 0)
-        }
-    }
-}
-
 private struct GroupHeader: View {
     let project: String
     var body: some View {
@@ -158,7 +133,6 @@ private struct GroupHeader: View {
             .font(.system(size: 10, weight: .bold)).foregroundStyle(.tertiary)
             .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 2)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.ultraThinMaterial)
     }
 }
 
@@ -225,15 +199,16 @@ private struct SessionRow: View {
 /// behavior encodes state — it circles for `liveBusy` (motion == alive now), parks at
 /// 9 o'clock for `liveIdle`, and is gone (ring goes dashed) for `cold`. An idle session
 /// that's waiting on the user (`needsInput`) parks in amber and pings a sonar ring
-/// outward; an idle session that finished cleanly parks in violet and breathes slowly
-/// (calm "sleeping LED", says "ready to verify").
+/// outward; an idle session that finished cleanly (`needsReview`) parks in violet while a
+/// comet arc sweeps the ring (a calm "lighthouse", says "ready to review").
 /// Transitions glide/fade rather than snap. Reduce-motion parks busy at the top and
-/// holds the knock steady.
+/// holds the knock/sweep steady.
 ///
 /// Busy rotation is a pure function of one shared wall clock, so every running session's
 /// orbit holds the same phase — the synced field reads as one calm hum (common fate),
-/// letting the lone amber knock break from it and grab the eye. A newly busy orbit snaps
-/// straight into that shared phase rather than starting its own.
+/// letting the lone amber knock break from it and grab the eye. All motion is driven by
+/// per-row `TimelineView(.animation)` (display-link, self-pausing when offscreen) rather
+/// than a per-row timer, so an idle field of rows costs nothing to keep on screen.
 private struct OrbitIndicator: View {
     let state: SessionState
     var needsInput: Bool = false
@@ -260,8 +235,6 @@ private struct OrbitIndicator: View {
     private var reduceMotion: Bool {
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     }
-    private let tick = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
-
     var body: some View {
         ZStack {
             ring
@@ -269,8 +242,7 @@ private struct OrbitIndicator: View {
         }
         .frame(width: 14, height: 14)
         .onAppear(perform: configureForAppear)
-        .onReceive(tick, perform: advance)
-        .onChange(of: state) { _, new in transition(to: new) }
+        .onChange(of: state) { old, new in transition(from: old, to: new) }
     }
 
     /// idle + waiting on the user. Drives the amber colorway and the pulse.
@@ -295,18 +267,38 @@ private struct OrbitIndicator: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: needsInput)
     }
 
-    private var satellitePoint: CGPoint {
-        let a = spin * .pi / 180
+    private func point(forAngle a0: Double) -> CGPoint {
+        let a = a0 * .pi / 180
         return CGPoint(x: Self.center.x + Self.radius * cos(a),
                        y: Self.center.y + Self.radius * sin(a))
+    }
+    private var satellitePoint: CGPoint { point(forAngle: spin) }
+
+    /// `needsReview` motion: a short comet arc sweeps the ring track on a calm ~2.8s loop —
+    /// a "lighthouse" that says "done, come look" without the urgency of the amber sonar.
+    private func sweepArc(_ color: Color) -> some View {
+        TimelineView(.animation) { ctx in
+            let p = (ctx.date.timeIntervalSinceReferenceDate / 2.8).truncatingRemainder(dividingBy: 1)
+            Circle()
+                .trim(from: 0, to: 0.16)
+                .stroke(color.opacity(0.85), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+                .rotationEffect(.degrees(p * 360))
+                .frame(width: 13, height: 13)
+        }
     }
 
     @ViewBuilder private var satellite: some View {
         let active = state == .liveBusy
-        let idleDone = state == .liveIdle && !knock
-        let color = active ? Self.emerald : (knock ? Self.amber : (idleDone ? Self.violet : Self.gray))
-        let glowing = active || knock
-        if knock && !reduceMotion {
+        let review = state == .liveIdle && !knock
+        let color = active ? Self.emerald : (knock ? Self.amber : (review ? Self.violet : Self.gray))
+        let glowing = active || knock || review
+        if active && !reduceMotion {
+            // Busy orbit: position is a pure function of the shared wall clock, drawn each
+            // display frame by this row's TimelineView — no per-row timer to schedule.
+            TimelineView(.animation) { ctx in
+                dot(color, glowing: glowing).position(point(forAngle: Self.spin(at: ctx.date)))
+            }
+        } else if knock && !reduceMotion {
             // Sonar ping: a ring expands outward from the parked satellite and fades,
             // every 1.3s. Driven by scaleEffect (Core Animation transform) so the
             // growth is sub-pixel smooth; .frame() rebuilds layout each tick and
@@ -325,13 +317,11 @@ private struct OrbitIndicator: View {
                 }
                 .position(satellitePoint)
             }
-        } else if idleDone && !reduceMotion {
-            // Slow breathing (~3.5s): "sleeping LED" — ambient, not a signal. Says
-            // alive + finished + at rest, without competing with the amber sonar.
-            TimelineView(.animation) { ctx in
-                let p = 0.5 - 0.5 * cos(2 * .pi * (ctx.date.timeIntervalSinceReferenceDate / 3.5)
-                    .truncatingRemainder(dividingBy: 1))
-                dot(color, glowing: glowing).opacity(0.6 + 0.4 * p).position(satellitePoint)
+        } else if review && !reduceMotion {
+            // Lighthouse sweep: parked violet dot + a comet arc tracking the ring.
+            ZStack {
+                sweepArc(color)
+                dot(color, glowing: glowing).position(satellitePoint)
             }
         } else {
             dot(color, glowing: glowing).position(satellitePoint).opacity(satelliteOpacity)
@@ -347,31 +337,28 @@ private struct OrbitIndicator: View {
 
     private func configureForAppear() {
         switch state {
-        case .liveBusy:  spin = reduceMotion ? 270 : Self.spin(at: Date()); satelliteOpacity = 1; dashed = false
+        case .liveBusy:  spin = reduceMotion ? 270 : Self.park; satelliteOpacity = 1; dashed = false
         case .liveIdle:  spin = Self.park; satelliteOpacity = 1; dashed = false
         case .cold:      satelliteOpacity = 0; dashed = true
         }
     }
 
-    /// Track the shared clock while busy; frozen otherwise (so an idle row holds its
-    /// eased-to-park angle).
-    private func advance(_ now: Date) {
-        guard state == .liveBusy, !reduceMotion else { return }
-        spin = Self.spin(at: now)
-    }
-
-    private func transition(to new: SessionState) {
+    private func transition(from old: SessionState, to new: SessionState) {
         switch new {
         case .liveBusy:
             run(.easeOut(duration: 0.25)) { satelliteOpacity = 1; dashed = false }
         case .liveIdle:
             run(.easeOut(duration: 0.25)) { satelliteOpacity = 1; dashed = false }
             if reduceMotion { spin = Self.park }
-            else { run(.easeOut(duration: 0.3)) { spin = nextPark(from: spin) } }
+            else {
+                if old == .liveBusy { spin = Self.spin(at: Date()) }   // glide home from the live orbit angle
+                run(.easeOut(duration: 0.3)) { spin = nextPark(from: spin) }
+            }
         case .cold:
             // Satellite fades and the ring dashes in one beat, so death reads as a single
             // motion that settles with the row's slide to its cold slot — not a dotted ring
             // popping in before the satellite has gone.
+            if !reduceMotion && old == .liveBusy { spin = Self.spin(at: Date()) }  // fade from where it orbited
             run(.easeInOut(duration: 0.3)) { satelliteOpacity = 0; dashed = true }
         }
     }

@@ -33,6 +33,9 @@ final class TaskListViewModel: ObservableObject {
 
     private var ticker: Timer?
     private var pollTicker: Timer?
+    /// Guards `reloadInBackground` against stacking when the 1s poll fires faster than a
+    /// vault scan completes.
+    private var isReloading = false
 
     /// Optimistic override expiry — after this, the disk-read value wins again.
     private let overrideTTL: TimeInterval = 5
@@ -68,6 +71,8 @@ final class TaskListViewModel: ObservableObject {
     // MARK: Reload
 
     func reloadInBackground() {
+        guard !isReloading else { return }
+        isReloading = true
         _Concurrency.Task.detached(priority: .utility) {
             let r = TaskStore().load()
             await self.ingest(r)
@@ -75,6 +80,7 @@ final class TaskListViewModel: ObservableObject {
     }
 
     private func ingest(_ r: (active: [VaultTask], archive: [VaultTask])) {
+        isReloading = false
         // Skip the published-property churn when the disk hasn't changed (avoids a
         // SwiftUI redraw every 1s for nothing).
         if r.active == raw.active && r.archive == raw.archive { return }

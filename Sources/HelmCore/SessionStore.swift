@@ -7,10 +7,15 @@ import Darwin
 ///
 /// Live    : ~/.claude/sessions/<pid>.json  (running only; pid/status/kind/name)
 /// History : ~/.claude/projects/*/<sessionId>.jsonl  (every session; filename == sessionId)
-/// Join key: sessionId.  Grouping: cwd under ~/projects/<name> → <name>, else "Other".
+/// Join key: sessionId.  Grouping: cwd under ~/projects/<name> → <name>; cwd == ~/Home
+/// → "Singular Chats" (one-off launchpad, live rows only in default view); else "Other".
 public struct SessionStore {
     public let claudeDir: URL
     public let home: String
+
+    /// Group name for one-off sessions launched directly in ~/Home. Not a project —
+    /// dead rows are hidden from the default view (search still finds them).
+    public static let singularChatsGroup = "Singular Chats"
 
     public init(home: String = NSHomeDirectory()) {
         self.home = home
@@ -39,7 +44,7 @@ public struct SessionStore {
     /// dir under `~/projects/` even if it has no sessions yet, so a freshly-created
     /// project shows up in the overlay before its first chat.
     public func grouped() -> [(project: String, sessions: [ChatSession])] {
-        Self.group(load(), includeEmpty: listProjects())
+        Self.group(load(), includeEmpty: listProjects() + [Self.singularChatsGroup])
     }
 
     /// Cheap live-only refresh for the open panel. Re-reads ONLY the live registry
@@ -58,6 +63,7 @@ public struct SessionStore {
 
     /// Map a working directory to its display group.
     public static func project(forCwd cwd: String, home: String) -> String {
+        if cwd == home + "/Home" { return singularChatsGroup }
         let prefix = home + "/projects/"
         guard cwd.hasPrefix(prefix) else { return "Other" }
         let rest = String(cwd.dropFirst(prefix.count))
@@ -212,11 +218,12 @@ public struct SessionStore {
         return classifyAssistantMessages(msgs)
     }
 
-    /// The Stop hook writes `{"reason":"needs_input"|"done", ...}`; map that to IdleReason.
+    /// The Stop hook writes `{"reason":"needs_input"|"done", ...}` (the wire format predates
+    /// the `needsReview` rename, so `"done"` still maps to `.needsReview`).
     public static func idleReason(fromState raw: String?) -> IdleReason? {
         switch raw {
         case "needs_input": return .needsInput
-        case "done":        return .done
+        case "done":        return .needsReview
         default:            return nil
         }
     }
@@ -224,7 +231,7 @@ public struct SessionStore {
     private struct ClassMsg { let role: String?; let toolUseIds: [String]; let resultIds: [String]; let lastText: String? }
 
     private static func classifyAssistantMessages(_ msgs: [ClassMsg]) -> IdleReason {
-        guard let li = msgs.lastIndex(where: { $0.role == "assistant" }) else { return .done }
+        guard let li = msgs.lastIndex(where: { $0.role == "assistant" }) else { return .needsReview }
         let last = msgs[li]
 
         let resultsAfter = Set(msgs[(li + 1)...].flatMap(\.resultIds))
@@ -234,7 +241,33 @@ public struct SessionStore {
             .split(whereSeparator: \.isNewline).last?
             .trimmingCharacters(in: .whitespaces)
             .hasSuffix("?") ?? false
-        return endsOnQuestion ? .needsInput : .done
+        return endsOnQuestion ? .needsInput : .needsReview
+    }
+
+    /// How loudly a row wants your attention — lowest wins. Drives both the in-group sort
+    /// and the jump hotkey: a session waiting on a decision (`needsInput`) outranks one
+    /// that's done and ready for review (`needsReview`), which outranks anything still live
+    /// (busy, or idle pending classification), which outranks cold. This is what keeps the
+    /// row the app exists to surface from sinking below busier rows or into the collapsed
+    /// tail — it lands in the top slots, where `perProjectCap` always shows it.
+    public static func attentionRank(_ s: ChatSession) -> Int {
+        if s.state == .liveIdle { return s.idleReason == .needsInput ? 0 : 1 }
+        return s.isLive ? 2 : 3   // busy : cold
+    }
+
+    /// The next session that wants you, for the jump hotkey. Considers only attention rows
+    /// (needs-input, then needs-review — never busy/cold), ordered by rank then recency, and
+    /// returns the one after `current` (wrapping). Falls to the first when `current` isn't
+    /// among them. nil when nothing wants you.
+    public static func nextAttentionSession(in rows: [ChatSession], after current: String?) -> ChatSession? {
+        let ordered = rows.filter { attentionRank($0) <= 1 }.sorted {
+            let ra = attentionRank($0), rb = attentionRank($1)
+            return ra != rb ? ra < rb : $0.lastActive > $1.lastActive
+        }
+        guard !ordered.isEmpty else { return nil }
+        guard let current, let i = ordered.firstIndex(where: { $0.sessionId == current })
+        else { return ordered.first }
+        return ordered[(i + 1) % ordered.count]
     }
 
     public static func group(_ sessions: [ChatSession], includeEmpty: [String] = [])
@@ -245,13 +278,20 @@ public struct SessionStore {
         }
         let sortRows: ([ChatSession]) -> [ChatSession] = { rows in
             rows.sorted {
-                if $0.isLive != $1.isLive { return $0.isLive }       // live first
-                return $0.lastActive > $1.lastActive                  // newest first
+                let ra = attentionRank($0), rb = attentionRank($1)
+                if ra != rb { return ra < rb }       // attention first (needs-input, review, …)
+                return $0.lastActive > $1.lastActive  // then newest
             }
         }
         return byProject.keys
             .sorted { a, b in
-                if (a == "Other") != (b == "Other") { return b == "Other" } // Other last
+                func rank(_ s: String) -> Int {
+                    if s == "Other" { return 2 }             // legacy bucket — last
+                    if s == singularChatsGroup { return -1 }      // launchpad — first; it's the most-reached-for section
+                    return 0                                  // real projects — alphabetical
+                }
+                let ra = rank(a), rb = rank(b)
+                if ra != rb { return ra < rb }
                 return a.localizedCaseInsensitiveCompare(b) == .orderedAscending
             }
             .map { ($0, sortRows(byProject[$0]!)) }
@@ -301,13 +341,6 @@ public struct SessionStore {
                                   kind: j.kind, status: j.status, name: j.name))
         }
         return out
-    }
-
-    /// SIGTERM a session's process — the "idle → dead" half of the kill action.
-    public static func terminate(_ pid: Int32) {
-        #if canImport(Darwin)
-        _ = kill(pid, SIGTERM)
-        #endif
     }
 
     /// Kill and block until the process is actually gone: SIGTERM, wait out `grace` for it
@@ -412,7 +445,14 @@ public struct SessionStore {
         #endif
     }
 
+    /// Parsed transcript heads, cached by path+mtime across `SessionStore` instances (which
+    /// are re-created on every scan). See `HistoryCache`.
+    static let historyCache = HistoryCache()
+
     /// Scan every transcript, extracting cwd/gitBranch/aiTitle (first occurrences) + mtime.
+    /// Each file's head is re-parsed only when its mtime advanced since the last scan, so a
+    /// summon costs "stat every transcript + read the few that changed" rather than "read
+    /// every transcript" — which matters as the append-only history grows without bound.
     public func readHistory() -> [HistoryRecord] {
         let dir = claudeDir.appendingPathComponent("projects")
         guard let projectDirs = try? FileManager.default.contentsOfDirectory(at: dir,
@@ -423,7 +463,11 @@ public struct SessionStore {
                 includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
             for f in files where f.pathExtension == "jsonl" {
                 if Self.isSubagentTranscript(filename: f.lastPathComponent) { continue }
-                let rec = readTranscript(f)
+                let mtime = (try? f.resourceValues(forKeys: [.contentModificationDateKey]))?
+                    .contentModificationDate ?? .distantPast
+                let rec = Self.historyCache.record(forPath: f.path, mtime: mtime) {
+                    self.readTranscript(f, mtime: mtime)
+                }
                 guard Self.isUserThread(entrypoint: rec.entrypoint) else { continue }
                 out.append(rec)
             }
@@ -442,11 +486,8 @@ public struct SessionStore {
     private static let headScanBytes = 4 * 1024 * 1024
     private static let chunkBytes = 64 * 1024
 
-    private func readTranscript(_ url: URL) -> HistoryRecord {
+    private func readTranscript(_ url: URL, mtime: Date) -> HistoryRecord {
         let sid = url.deletingPathExtension().lastPathComponent
-        let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
-            .contentModificationDate ?? .distantPast
-
         var cwd: String?, gitBranch: String?, aiTitle: String?, entrypoint: String?
         if let content = readHead(url) {
             for line in content.split(separator: "\n", omittingEmptySubsequences: true) {
@@ -536,5 +577,26 @@ public struct SessionStore {
         try? handle.seek(toOffset: end > Self.tailBytes ? end - Self.tailBytes : 0)
         guard let data = try? handle.readToEnd() else { return nil }
         return String(decoding: data, as: UTF8.self)
+    }
+}
+
+/// Process-wide cache of parsed transcript heads, keyed by file path + mtime. `SessionStore`
+/// is re-instantiated on every scan, so the cache must outlive instances — hence it's held
+/// statically and synchronised (scans can overlap). Append-only transcripts mean a stale
+/// entry (for the rare deleted file) only wastes a little memory and is never *wrong*: a
+/// changed file always carries a newer mtime, forcing a re-parse.
+final class HistoryCache {
+    private let lock = NSLock()
+    private var entries: [String: (mtime: Date, record: HistoryRecord)] = [:]
+
+    /// Cached record for `path` if its `mtime` is unchanged; otherwise `build()` it, store
+    /// it, and return it.
+    func record(forPath path: String, mtime: Date, build: () -> HistoryRecord) -> HistoryRecord {
+        lock.lock()
+        if let hit = entries[path], hit.mtime == mtime { lock.unlock(); return hit.record }
+        lock.unlock()
+        let rec = build()
+        lock.lock(); entries[path] = (mtime, rec); lock.unlock()
+        return rec
     }
 }
