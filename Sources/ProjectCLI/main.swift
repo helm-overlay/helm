@@ -65,7 +65,7 @@ examples:
   project show                        Print project summary + worktree tree
   project rm helm/bug-fix             Remove a worktree (refuses if dirty)
   project rm                          Remove the worktree you're in
-  project sync                        Resync .claude/ symlinks into cwd
+  project sync                        Resync .claude/ + CLAUDE.md symlinks into cwd
 
 bare-name repo lookup searches:
   1. <current-project>/<name>         (sibling already in this project)
@@ -87,7 +87,7 @@ usage: project <command> [args]
   ls [-a]                    list worktrees (or all projects if outside)
   show                       print current project's summary
   rm [<repo>/<branch>] [-f]  remove a worktree
-  sync [<path>]              resync .claude/ symlinks into a worktree
+  sync [<path>]              resync .claude/ + CLAUDE.md symlinks into a worktree
   install-cli                symlink this binary into ~/.local/bin
   where                      show which build is active on $PATH
   help                       this message
@@ -215,6 +215,7 @@ func cmdAdd(_ args: [String]) {
 
     for f in mgr.copyEnvFiles(from: resolution.sourcePath, to: target) { ok("copied \(f)") }
     for l in mgr.symlinkClaude(from: resolution.sourcePath, to: target) { ok("symlinked .claude/\(l)") }
+    for l in mgr.symlinkRootContext(from: resolution.sourcePath, to: target) { ok("symlinked \(l)") }
 
     print()
     print("next:  cd \(target.path)")
@@ -365,6 +366,7 @@ func cmdSync(_ args: [String]) {
     if source == target { die("\(target.path) IS the source repo — nothing to sync") }
     info("syncing .claude/ from \(source.path) → \(target.path)")
     for l in mgr.symlinkClaude(from: source, to: target) { ok("symlinked .claude/\(l)") }
+    for l in mgr.symlinkRootContext(from: source, to: target) { ok("symlinked \(l)") }
     for f in mgr.copyEnvFiles(from: source, to: target) { ok("copied \(f)") }
     ok("done")
 }

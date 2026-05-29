@@ -264,9 +264,16 @@ public struct ProjectManager {
     // MARK: Side effects — env + .claude
 
     public static let envFileNames = [".env", ".env.local"]
-    public static let claudeLinkItems = [
-        "settings.json", "settings.local.json", "stack-harness.yml", "agents", "knowledge"
+
+    /// Top-level entries inside `.claude/` that are per-machine/per-session runtime state
+    /// or OS cruft — never share these across worktrees.
+    public static let claudeSkipItems: Set<String> = [
+        ".DS_Store", "projects", "todos", "shell-snapshots", "statsig", "ide", "logs",
+        "history.jsonl",
     ]
+
+    /// Root-level local context files git won't carry into a worktree when gitignored.
+    public static let rootContextFiles = ["CLAUDE.md", "CLAUDE.local.md"]
 
     /// Copies `.env` / `.env.local` from `source` to `target` if present. Returns the
     /// list of filenames actually copied.
@@ -283,31 +290,52 @@ public struct ProjectManager {
         return copied
     }
 
-    /// Symlinks `.claude/<item>` from source into target for every standard item that
-    /// exists in source and isn't already present in target. Returns linked item names.
+    /// Symlinks every top-level entry in source's `.claude/` into target, except known
+    /// runtime/state entries (`claudeSkipItems`) and anything already present in target.
+    /// Returns linked item names.
     @discardableResult
     public func symlinkClaude(from source: URL, to target: URL) -> [String] {
         let srcClaude = source.appendingPathComponent(".claude")
         guard isDir(srcClaude) else { return [] }
+        guard let entries = try? fm.contentsOfDirectory(atPath: srcClaude.path) else { return [] }
         let dstClaude = target.appendingPathComponent(".claude")
         try? fm.createDirectory(at: dstClaude, withIntermediateDirectories: true)
         var linked: [String] = []
-        for item in Self.claudeLinkItems {
+        for item in entries.sorted() {
+            if Self.claudeSkipItems.contains(item) { continue }
             let s = srcClaude.appendingPathComponent(item)
             let d = dstClaude.appendingPathComponent(item)
-            guard fm.fileExists(atPath: s.path) else { continue }
-            if fm.fileExists(atPath: d.path) { continue }
-            // fileExists follows symlinks. Detect a dangling symlink separately.
-            let attrs = try? fm.attributesOfItem(atPath: d.path)
-            if attrs != nil { continue }
-            do {
-                try fm.createSymbolicLink(at: d, withDestinationURL: s)
-                linked.append(item)
-            } catch {
-                continue
-            }
+            if linkIfAbsent(from: s, to: d) { linked.append(item) }
         }
         return linked
+    }
+
+    /// Symlinks root-level local context files (`CLAUDE.md`, `CLAUDE.local.md`) from source
+    /// into target when present and not already there. Returns linked filenames.
+    @discardableResult
+    public func symlinkRootContext(from source: URL, to target: URL) -> [String] {
+        var linked: [String] = []
+        for name in Self.rootContextFiles {
+            let s = source.appendingPathComponent(name)
+            let d = target.appendingPathComponent(name)
+            if linkIfAbsent(from: s, to: d) { linked.append(name) }
+        }
+        return linked
+    }
+
+    /// Creates a symlink at `d` pointing to `s` when `s` exists and `d` is free (no file
+    /// and no dangling symlink). Returns whether a link was made.
+    private func linkIfAbsent(from s: URL, to d: URL) -> Bool {
+        guard fm.fileExists(atPath: s.path) else { return false }
+        if fm.fileExists(atPath: d.path) { return false }
+        // fileExists follows symlinks. Detect a dangling symlink separately.
+        if (try? fm.attributesOfItem(atPath: d.path)) != nil { return false }
+        do {
+            try fm.createSymbolicLink(at: d, withDestinationURL: s)
+            return true
+        } catch {
+            return false
+        }
     }
 
     // MARK: Listings

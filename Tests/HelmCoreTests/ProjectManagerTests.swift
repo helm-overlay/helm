@@ -231,6 +231,53 @@ final class ProjectManagerTests: XCTestCase {
         XCTAssertTrue(secondPass.isEmpty)
     }
 
+    func testSymlinkClaudeLinksArbitraryItemsAndSkipsDenylist() throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let fm = FileManager.default
+        let source = env.home.appendingPathComponent("src")
+        let target = env.home.appendingPathComponent("dst")
+        let srcClaude = source.appendingPathComponent(".claude")
+        try fm.createDirectory(at: srcClaude, withIntermediateDirectories: true)
+        try fm.createDirectory(at: target, withIntermediateDirectories: true)
+        // An item not in any historical allowlist — must still be linked (default-open).
+        try "y".write(to: srcClaude.appendingPathComponent("some-new-config.json"),
+                      atomically: true, encoding: .utf8)
+        // Runtime/state entries — must be skipped.
+        try fm.createDirectory(at: srcClaude.appendingPathComponent("projects"),
+                               withIntermediateDirectories: true)
+        try "z".write(to: srcClaude.appendingPathComponent(".DS_Store"),
+                      atomically: true, encoding: .utf8)
+
+        let linked = Set(env.manager.symlinkClaude(from: source, to: target))
+        XCTAssertTrue(linked.contains("some-new-config.json"))
+        XCTAssertFalse(linked.contains("projects"))
+        XCTAssertFalse(linked.contains(".DS_Store"))
+        XCTAssertFalse(fm.fileExists(atPath: target.appendingPathComponent(".claude/projects").path))
+    }
+
+    func testSymlinkRootContextLinksClaudeFiles() throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let fm = FileManager.default
+        let source = env.home.appendingPathComponent("src")
+        let target = env.home.appendingPathComponent("dst")
+        try fm.createDirectory(at: source, withIntermediateDirectories: true)
+        try fm.createDirectory(at: target, withIntermediateDirectories: true)
+        try "root".write(to: source.appendingPathComponent("CLAUDE.md"),
+                         atomically: true, encoding: .utf8)
+        try "local".write(to: source.appendingPathComponent("CLAUDE.local.md"),
+                          atomically: true, encoding: .utf8)
+
+        let linked = Set(env.manager.symlinkRootContext(from: source, to: target))
+        XCTAssertEqual(linked, ["CLAUDE.md", "CLAUDE.local.md"])
+        let dst = target.appendingPathComponent("CLAUDE.md")
+        XCTAssertEqual(try? fm.destinationOfSymbolicLink(atPath: dst.path),
+                       source.appendingPathComponent("CLAUDE.md").path)
+        // Idempotent.
+        XCTAssertTrue(env.manager.symlinkRootContext(from: source, to: target).isEmpty)
+    }
+
     // MARK: listProjects tagline
 
     func testListProjectsExtractsTaglineFromPROJECTmd() throws {
