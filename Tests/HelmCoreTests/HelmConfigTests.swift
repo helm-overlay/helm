@@ -40,4 +40,36 @@ final class HelmConfigTests: XCTestCase {
         XCTAssertEqual(HelmConfig(hideOlderThanDays: 0).hideOlderThan, 0)
         XCTAssertEqual(HelmConfig(hideOlderThanDays: -1).hideOlderThan, 0)
     }
+
+    func testAgentDefaultsPreserveClaudeOnly() {
+        let cfg = HelmConfig()
+        XCTAssertEqual(cfg.enabledAgents, [.claude])
+        XCTAssertEqual(cfg.defaultAgent, .claude)
+    }
+
+    func testLoadReadsEnabledAndDefaultAgents() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("helm-cfg-\(UUID()).json")
+        try #"{"enabledAgents":["claude","pi"],"defaultAgent":"pi"}"#.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let cfg = HelmConfig.load(from: url)
+        XCTAssertEqual(cfg.enabledAgents, [.claude, .pi])
+        XCTAssertEqual(cfg.defaultAgent, .pi)
+    }
+
+    func testDefaultAgentFallsBackToEnabledAgent() {
+        let cfg = HelmConfig(enabledAgents: [.pi], defaultAgent: .claude)
+        XCTAssertEqual(cfg.enabledAgents, [.pi])
+        XCTAssertEqual(cfg.defaultAgent, .pi)
+    }
+
+    func testInvalidAgentConfigFallsBackToClaudeOnly() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("helm-cfg-\(UUID()).json")
+        try #"{"enabledAgents":["ghost"],"defaultAgent":"pi"}"#.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let cfg = HelmConfig.load(from: url)
+        XCTAssertEqual(cfg.enabledAgents, [.claude])
+        XCTAssertEqual(cfg.defaultAgent, .claude)
+    }
 }

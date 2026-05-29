@@ -10,16 +10,23 @@ import Darwin
 /// Join key: sessionId.  Grouping: cwd under ~/projects/<name> → <name>; cwd == ~/Home
 /// → "Singular Chats" (one-off launchpad, live rows only in default view); else "Other".
 public struct SessionStore {
-    public let claudeDir: URL
     public let home: String
+    public let enabledAgents: [AgentKind]
+    private let backends: [any SessionBackend]
 
     /// Group name for one-off sessions launched directly in ~/Home. Not a project —
     /// dead rows are hidden from the default view (search still finds them).
     public static let singularChatsGroup = "Singular Chats"
 
-    public init(home: String = NSHomeDirectory()) {
+    public init(home: String = NSHomeDirectory(), enabledAgents: [AgentKind] = HelmConfig.load().enabledAgents) {
         self.home = home
-        self.claudeDir = URL(fileURLWithPath: home).appendingPathComponent(".claude")
+        self.enabledAgents = enabledAgents
+        self.backends = enabledAgents.map { agent in
+            switch agent {
+            case .claude: return ClaudeSessionBackend(home: home)
+            case .pi: return PiSessionBackend(home: home)
+            }
+        }
     }
 
     // MARK: Public API
@@ -31,11 +38,7 @@ public struct SessionStore {
     public func load() -> [ChatSession] {
         merge(live: readLive(), history: readHistory()).map { s in
             guard s.state == .liveIdle else { return s }
-            if let reason = readStateFile(sessionId: s.sessionId) {   // hook's verdict wins
-                return s.with(idleReason: reason)
-            }
-            guard let url = locateTranscript(s.sessionId), let tail = readTail(url) else { return s }
-            return s.with(idleReason: Self.classifyIdleTail(tail))
+            return s.with(idleReason: backend(for: s.agent)?.idleReason(for: s))
         }
     }
 
@@ -54,8 +57,8 @@ public struct SessionStore {
     /// the caller does one full reload to pull its history/label.
     public func refreshLiveState(_ rows: [ChatSession]) -> (rows: [ChatSession], newSessions: Bool) {
         Self.reconcileLive(rows, live: readLive()) { sessionId in
-            readStateFile(sessionId: sessionId)
-                ?? locateTranscript(sessionId).flatMap(readTail).map(Self.classifyIdleTail)
+            guard let row = rows.first(where: { $0.sessionId == sessionId }) else { return nil }
+            return backend(for: row.agent)?.idleReason(for: row)
         }
     }
 
@@ -65,18 +68,22 @@ public struct SessionStore {
     public static func project(forCwd cwd: String, home: String) -> String {
         if cwd == home + "/Home" { return singularChatsGroup }
         let prefix = home + "/projects/"
-        guard cwd.hasPrefix(prefix) else { return "Other" }
-        let rest = String(cwd.dropFirst(prefix.count))
+        if cwd.hasPrefix(prefix) {
+            let rest = String(cwd.dropFirst(prefix.count))
+            return rest.split(separator: "/", maxSplits: 1).first.map(String.init) ?? "Other"
+        }
+        guard let range = cwd.range(of: "/projects/") else { return "Other" }
+        let rest = String(cwd[range.upperBound...])
         return rest.split(separator: "/", maxSplits: 1).first.map(String.init) ?? "Other"
     }
 
     /// Join history (left) with live on sessionId. Live-only sessions are still included.
     public func merge(live: [LiveRecord], history: [HistoryRecord]) -> [ChatSession] {
-        let liveById = Dictionary(live.map { ($0.sessionId, $0) }, uniquingKeysWith: { a, _ in a })
+        let liveById = Dictionary(live.map { ("\($0.agent.rawValue):\($0.sessionId)", $0) }, uniquingKeysWith: { a, _ in a })
         var out: [ChatSession] = []
 
         for h in history {
-            let l = liveById[h.sessionId]
+            let l = liveById["\(h.agent.rawValue):\(h.sessionId)"]
             let state = Self.state(forStatus: l?.status, isLive: l != nil)
             let label = l?.name?.nonEmpty
                 ?? h.aiTitle?.nonEmpty
@@ -87,17 +94,18 @@ public struct SessionStore {
                 sessionId: h.sessionId, cwd: h.cwd ?? "",
                 project: Self.project(forCwd: h.cwd ?? "", home: home),
                 label: label, state: state, kind: l?.kind, pid: l?.pid,
-                lastActive: h.lastActive, branch: h.gitBranch))
+                lastActive: h.lastActive, branch: h.gitBranch,
+                agent: h.agent, transcriptPath: h.transcriptPath))
         }
 
         // Live sessions with no transcript yet (rare): surface them too.
-        let seen = Set(history.map(\.sessionId))
-        for l in live where !seen.contains(l.sessionId) {
+        let seen = Set(history.map { "\($0.agent.rawValue):\($0.sessionId)" })
+        for l in live where !seen.contains("\(l.agent.rawValue):\(l.sessionId)") {
             out.append(ChatSession(
                 sessionId: l.sessionId, cwd: "", project: "Other",
                 label: l.name?.nonEmpty ?? l.sessionId,
                 state: Self.state(forStatus: l.status, isLive: true),
-                kind: l.kind, pid: l.pid, lastActive: Date()))
+                kind: l.kind, pid: l.pid, lastActive: Date(), agent: l.agent))
         }
         return out
     }
@@ -110,16 +118,17 @@ public struct SessionStore {
     public static func reconcileLive(_ rows: [ChatSession], live: [LiveRecord],
                                      idleReason: (String) -> IdleReason?)
         -> (rows: [ChatSession], newSessions: Bool) {
-        let liveById = Dictionary(live.map { ($0.sessionId, $0) }, uniquingKeysWith: { a, _ in a })
-        let known = Set(rows.map(\.sessionId))
-        let newSessions = live.contains { !known.contains($0.sessionId) }
+        let liveById = Dictionary(live.map { ("\($0.agent.rawValue):\($0.sessionId)", $0) }, uniquingKeysWith: { a, _ in a })
+        let known = Set(rows.map(\.id))
+        let newSessions = live.contains { !known.contains("\($0.agent.rawValue):\($0.sessionId)") }
         let updated = rows.map { row -> ChatSession in
-            let l = liveById[row.sessionId]
+            let l = liveById[row.id]
             let state = Self.state(forStatus: l?.status, isLive: l != nil)
             return ChatSession(
                 sessionId: row.sessionId, cwd: row.cwd, project: row.project, label: row.label,
                 state: state, kind: l?.kind, pid: l?.pid, lastActive: row.lastActive,
-                branch: row.branch, idleReason: state == .liveIdle ? idleReason(row.sessionId) : nil)
+                branch: row.branch, idleReason: state == .liveIdle ? idleReason(row.sessionId) : nil,
+                agent: row.agent, transcriptPath: row.transcriptPath)
         }
         return (updated, newSessions)
     }
@@ -265,7 +274,7 @@ public struct SessionStore {
             return ra != rb ? ra < rb : $0.lastActive > $1.lastActive
         }
         guard !ordered.isEmpty else { return nil }
-        guard let current, let i = ordered.firstIndex(where: { $0.sessionId == current })
+        guard let current, let i = ordered.firstIndex(where: { $0.id == current || $0.sessionId == current })
         else { return ordered.first }
         return ordered[(i + 1) % ordered.count]
     }
@@ -318,36 +327,22 @@ public struct SessionStore {
         return out
     }
 
-    // MARK: Filesystem readers
+    // MARK: Backend dispatch + shared filesystem helpers
 
-    private struct LiveJSON: Decodable {
-        let pid: Int32; let sessionId: String
-        let kind: String?; let status: String?; let name: String?; let entrypoint: String?
+    private func backend(for agent: AgentKind) -> (any SessionBackend)? {
+        backends.first { $0.agent == agent }
     }
 
-    /// Read live registry, dropping files whose PID is no longer alive (stale) and any
-    /// hook/SDK-induced sessions (keep only user threads).
     public func readLive() -> [LiveRecord] {
-        let dir = claudeDir.appendingPathComponent("sessions")
-        let files = (try? FileManager.default.contentsOfDirectory(at: dir,
-            includingPropertiesForKeys: nil)) ?? []
-        var out: [LiveRecord] = []
-        for f in files where f.pathExtension == "json" {
-            guard let data = try? Data(contentsOf: f),
-                  let j = try? JSONDecoder().decode(LiveJSON.self, from: data),
-                  Self.isUserThread(entrypoint: j.entrypoint),
-                  Self.isAlive(j.pid) else { continue }
-            out.append(LiveRecord(pid: j.pid, sessionId: j.sessionId,
-                                  kind: j.kind, status: j.status, name: j.name))
-        }
-        return out
+        backends.flatMap { $0.readLive() }
+    }
+
+    public func readHistory() -> [HistoryRecord] {
+        backends.flatMap { $0.readHistory() }
     }
 
     /// Kill and block until the process is actually gone: SIGTERM, wait out `grace` for it
-    /// to exit on its own (`claude` shuts down gracefully and isn't our child, so it can
-    /// take ~1s), then SIGKILL if it's still up. Blocking — call off the main thread. This
-    /// is what lets the caller reload only once the registry will agree the session is
-    /// dead, instead of racing a still-exiting process back into an idle row.
+    /// to exit on its own, then SIGKILL if it's still up. Blocking — call off the main thread.
     public static func terminateAndWait(_ pid: Int32, grace: Double = 1.5) {
         #if canImport(Darwin)
         _ = kill(pid, SIGTERM)
@@ -357,7 +352,6 @@ public struct SessionStore {
         #endif
     }
 
-    /// Poll `isAlive` (50ms) until the process exits or `timeout` elapses; true if it went.
     @discardableResult
     private static func waitForExit(_ pid: Int32, timeout: Double) -> Bool {
         #if canImport(Darwin)
@@ -370,233 +364,47 @@ public struct SessionStore {
         return !isAlive(pid)
     }
 
-    /// The directory Helm and the Stop hook share for per-session classifications.
     static func stateDir(home: String) -> URL {
         URL(fileURLWithPath: home).appendingPathComponent(".helm/state")
     }
 
-    /// The path Helm and the Stop hook share for a session's classification.
     static func stateFileURL(_ sessionId: String, home: String) -> URL {
         stateDir(home: home).appendingPathComponent("\(sessionId).json")
     }
 
-    /// Delete a session's state file ourselves. Needed after a self-initiated kill: the
-    /// process dies before Claude Code can run its `SessionEnd` cleanup hook, and the
-    /// `sessionId` (hence the filename) is reused on `claude --resume`.
     public static func clearState(_ sessionId: String, home: String = NSHomeDirectory()) {
         try? FileManager.default.removeItem(at: stateFileURL(sessionId, home: home))
     }
 
-    // MARK: State-file reaping
-
-    /// Of the state files present, the ones whose session is no longer running. Pure set
-    /// difference so it's tested without the filesystem.
     public static func deadStateIds(stateFileIds: Set<String>, aliveIds: Set<String>) -> Set<String> {
         stateFileIds.subtracting(aliveIds)
     }
 
-    /// Delete state files left behind by sessions that have since exited. The `SessionEnd`
-    /// hook clears a session's file on clean exit; a crash or `kill -9` skips that, leaking
-    /// a stale verdict (which a later `claude --resume` would briefly re-read, since it
-    /// reuses the sessionId). A nil alive set means we couldn't read the registry — skip
-    /// the sweep rather than risk reaping files for sessions that are actually live.
     @discardableResult
     public func reapDeadState() -> [String] {
-        guard let alive = aliveSessionIds() else { return [] }
-        let dead = Self.deadStateIds(stateFileIds: stateFileIds(), aliveIds: alive)
-        for id in dead {
-            try? FileManager.default.removeItem(at: Self.stateFileURL(id, home: home))
+        var reaped: [String] = []
+        if let claude = backend(for: .claude), let alive = claude.aliveSessionIds() {
+            let dead = Self.deadStateIds(stateFileIds: stateFileIds(in: Self.stateDir(home: home)), aliveIds: alive)
+            for id in dead { try? FileManager.default.removeItem(at: Self.stateFileURL(id, home: home)) }
+            reaped.append(contentsOf: dead.map { "claude:\($0)" })
         }
-        return Array(dead)
-    }
-
-    /// sessionIds that currently have a state file (filename minus `.json`).
-    private func stateFileIds() -> Set<String> {
-        let files = (try? FileManager.default.contentsOfDirectory(at: Self.stateDir(home: home),
-            includingPropertiesForKeys: nil)) ?? []
-        return Set(files.filter { $0.pathExtension == "json" }
-                        .map { $0.deletingPathExtension().lastPathComponent })
-    }
-
-    /// Every running session's id, by liveness alone (any entrypoint). Unlike `readLive()`
-    /// this does NOT drop automation threads — the reaper asks "is this process alive?",
-    /// not "is this my kind of thread?". nil if the registry dir can't be enumerated.
-    private func aliveSessionIds() -> Set<String>? {
-        let dir = claudeDir.appendingPathComponent("sessions")
-        guard let files = try? FileManager.default.contentsOfDirectory(at: dir,
-            includingPropertiesForKeys: nil) else { return nil }
-        var out: Set<String> = []
-        for f in files where f.pathExtension == "json" {
-            guard let data = try? Data(contentsOf: f),
-                  let j = try? JSONDecoder().decode(LiveJSON.self, from: data),
-                  Self.isAlive(j.pid) else { continue }
-            out.insert(j.sessionId)
+        if let pi = backend(for: .pi), let alive = pi.aliveSessionIds() {
+            let dead = Self.deadStateIds(stateFileIds: stateFileIds(in: PiSessionBackend.stateDir(home: home)), aliveIds: alive)
+            for id in dead { try? FileManager.default.removeItem(at: PiSessionBackend.stateFileURL(id, home: home)) }
+            reaped.append(contentsOf: dead.map { "pi:\($0)" })
         }
-        return out
+        return reaped
     }
 
-    /// `kill(pid, 0)`: 0 == alive; EPERM == alive but not ours; ESRCH == dead.
-    public static func isAlive(_ pid: Int32) -> Bool {
-        #if canImport(Darwin)
-        if kill(pid, 0) == 0 { return true }
-        return errno == EPERM
-        #else
-        return false
-        #endif
+    private func stateFileIds(in dir: URL) -> Set<String> {
+        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        return Set(files.filter { $0.pathExtension == "json" }.map { $0.deletingPathExtension().lastPathComponent })
     }
 
-    /// Parsed transcript heads, cached by path+mtime across `SessionStore` instances (which
-    /// are re-created on every scan). See `HistoryCache`.
-    static let historyCache = HistoryCache()
+    public static func isAlive(_ pid: Int32) -> Bool { SessionIO.isAlive(pid) }
 
-    /// Scan every transcript, extracting cwd/gitBranch/aiTitle (first occurrences) + mtime.
-    /// Each file's head is re-parsed only when its mtime advanced since the last scan, so a
-    /// summon costs "stat every transcript + read the few that changed" rather than "read
-    /// every transcript" — which matters as the append-only history grows without bound.
-    public func readHistory() -> [HistoryRecord] {
-        let dir = claudeDir.appendingPathComponent("projects")
-        guard let projectDirs = try? FileManager.default.contentsOfDirectory(at: dir,
-            includingPropertiesForKeys: nil) else { return [] }
-        var out: [HistoryRecord] = []
-        for pdir in projectDirs {
-            let files = (try? FileManager.default.contentsOfDirectory(at: pdir,
-                includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-            for f in files where f.pathExtension == "jsonl" {
-                if Self.isSubagentTranscript(filename: f.lastPathComponent) { continue }
-                let mtime = (try? f.resourceValues(forKeys: [.contentModificationDateKey]))?
-                    .contentModificationDate ?? .distantPast
-                let rec = Self.historyCache.record(forPath: f.path, mtime: mtime) {
-                    self.readTranscript(f, mtime: mtime)
-                }
-                guard Self.isUserThread(entrypoint: rec.entrypoint) else { continue }
-                out.append(rec)
-            }
-        }
-        return out
-    }
-
-    /// cwd/gitBranch/aiTitle all appear within the first records, so we only read the
-    /// file head instead of loading the whole (possibly multi-MB) transcript. We collect
-    /// up to `headBudgetBytes` of *small* lines, skipping any single line larger than
-    /// `maxLineBytes` (a user message with an embedded base64 image), and we never scan
-    /// past `headScanBytes` in total — so a transcript that opens with a screenshot still
-    /// surfaces the next small record's cwd/aiTitle/entrypoint.
-    private static let headBudgetBytes = 64 * 1024
-    private static let maxLineBytes = 256 * 1024
-    private static let headScanBytes = 4 * 1024 * 1024
-    private static let chunkBytes = 64 * 1024
-
-    private func readTranscript(_ url: URL, mtime: Date) -> HistoryRecord {
-        let sid = url.deletingPathExtension().lastPathComponent
-        var cwd: String?, gitBranch: String?, aiTitle: String?, entrypoint: String?
-        if let content = readHead(url) {
-            for line in content.split(separator: "\n", omittingEmptySubsequences: true) {
-                guard let data = line.data(using: .utf8),
-                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-                else { continue }
-                if cwd == nil, let c = obj["cwd"] as? String, !c.isEmpty {
-                    cwd = c
-                    gitBranch = (obj["gitBranch"] as? String)?.nonEmpty
-                }
-                if aiTitle == nil, let t = obj["aiTitle"] as? String, !t.isEmpty {
-                    aiTitle = t
-                }
-                if entrypoint == nil, let e = obj["entrypoint"] as? String, !e.isEmpty {
-                    entrypoint = e
-                }
-                if cwd != nil && aiTitle != nil && entrypoint != nil { break }   // stop early
-            }
-        }
-        return HistoryRecord(sessionId: sid, cwd: cwd, gitBranch: gitBranch,
-                             aiTitle: aiTitle, entrypoint: entrypoint, lastActive: mtime)
-    }
-
-    private func readHead(_ url: URL) -> String? {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? handle.close() }
-        return Self.collectSmallLines(reading: { try? handle.read(upToCount: $0) })
-    }
-
-    /// Chunk-streams from `read`, dropping any single line over `maxLineBytes` (image blobs),
-    /// until `headBudgetBytes` of small lines are collected or `headScanBytes` are scanned.
-    /// Pulled out as a static so unit tests can drive it without a real file.
     static func collectSmallLines(reading read: (Int) -> Data?) -> String? {
-        var buffer = Data(), collected = Data(), scanned = 0
-        let nl: UInt8 = 0x0A
-        outer: while scanned < headScanBytes, collected.count < headBudgetBytes {
-            guard let chunk = read(chunkBytes), !chunk.isEmpty else { break }
-            scanned += chunk.count
-            buffer.append(chunk)
-            while let nlIdx = buffer.firstIndex(of: nl) {
-                let lineLen = nlIdx - buffer.startIndex
-                if lineLen <= maxLineBytes {
-                    collected.append(buffer[buffer.startIndex..<nlIdx])
-                    collected.append(nl)
-                }
-                buffer.removeSubrange(buffer.startIndex...nlIdx)
-                if collected.count >= headBudgetBytes { break outer }
-            }
-            // Drop an unterminated mega-line so the buffer doesn't keep growing.
-            if buffer.count > maxLineBytes { buffer.removeAll(keepingCapacity: false) }
-        }
-        return collected.isEmpty ? nil : String(decoding: collected, as: UTF8.self)
-    }
-
-    /// The Stop hook's classification at ~/.helm/state/<sessionId>.json. Authoritative for
-    /// idle rows: the registry already gates on real-time idle/busy, and the hook rewrites
-    /// this on every turn end, so a present file reflects the current idle turn. (No mtime
-    /// gate — transcripts get trailing metadata writes that would falsely look "newer".)
-    private func readStateFile(sessionId: String) -> IdleReason? {
-        let url = Self.stateFileURL(sessionId, home: home)
-        guard let data = try? Data(contentsOf: url),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        return Self.idleReason(fromState: obj["reason"] as? String)
-    }
-
-    /// Find a session's transcript by filename (== sessionId) across project dirs.
-    private func locateTranscript(_ sessionId: String) -> URL? {
-        let dir = claudeDir.appendingPathComponent("projects")
-        guard let projectDirs = try? FileManager.default.contentsOfDirectory(at: dir,
-            includingPropertiesForKeys: nil) else { return nil }
-        for pdir in projectDirs {
-            let url = pdir.appendingPathComponent("\(sessionId).jsonl")
-            if FileManager.default.fileExists(atPath: url.path) { return url }
-        }
-        return nil
-    }
-
-    private static let tailBytes: UInt64 = 32 * 1024
-
-    /// Last `tailBytes` of the transcript. The leading line is usually mid-record and
-    /// fails to parse (harmless — the classifier just skips it).
-    private func readTail(_ url: URL) -> String? {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? handle.close() }
-        let end = (try? handle.seekToEnd()) ?? 0
-        try? handle.seek(toOffset: end > Self.tailBytes ? end - Self.tailBytes : 0)
-        guard let data = try? handle.readToEnd() else { return nil }
-        return String(decoding: data, as: UTF8.self)
+        SessionIO.collectSmallLines(reading: read)
     }
 }
 
-/// Process-wide cache of parsed transcript heads, keyed by file path + mtime. `SessionStore`
-/// is re-instantiated on every scan, so the cache must outlive instances — hence it's held
-/// statically and synchronised (scans can overlap). Append-only transcripts mean a stale
-/// entry (for the rare deleted file) only wastes a little memory and is never *wrong*: a
-/// changed file always carries a newer mtime, forcing a re-parse.
-final class HistoryCache {
-    private let lock = NSLock()
-    private var entries: [String: (mtime: Date, record: HistoryRecord)] = [:]
-
-    /// Cached record for `path` if its `mtime` is unchanged; otherwise `build()` it, store
-    /// it, and return it.
-    func record(forPath path: String, mtime: Date, build: () -> HistoryRecord) -> HistoryRecord {
-        lock.lock()
-        if let hit = entries[path], hit.mtime == mtime { lock.unlock(); return hit.record }
-        lock.unlock()
-        let rec = build()
-        lock.lock(); entries[path] = (mtime, rec); lock.unlock()
-        return rec
-    }
-}

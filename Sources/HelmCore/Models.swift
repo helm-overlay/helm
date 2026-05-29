@@ -1,5 +1,18 @@
 import Foundation
 
+/// Supported coding-agent providers whose sessions Helm can display.
+public enum AgentKind: String, CaseIterable, Codable, Equatable, Hashable {
+    case claude
+    case pi
+
+    public var displayName: String {
+        switch self {
+        case .claude: return "Claude"
+        case .pi: return "Pi"
+        }
+    }
+}
+
 /// Display state of a chat row, derived from the live registry + liveness check.
 public enum SessionState: String, Equatable {
     case liveBusy   // alive process, status == busy   → orbiting satellite
@@ -20,6 +33,8 @@ public enum IdleReason: String, Equatable {
 /// One row in the overlay: a Claude session, live or historical, joined on `sessionId`.
 public struct ChatSession: Identifiable, Equatable {
     public let sessionId: String
+    public let agent: AgentKind
+    public let transcriptPath: String?
     public let cwd: String
     public let project: String       // grouping key (~/projects/<name>, else "Other")
     public let label: String
@@ -30,7 +45,7 @@ public struct ChatSession: Identifiable, Equatable {
     public let pid: Int32?           // live rows only
     public let lastActive: Date      // transcript file mtime (history) or now (live-only)
 
-    public var id: String { sessionId }
+    public var id: String { "\(agent.rawValue):\(sessionId)" }
     public var isLive: Bool { state != .cold }
     public var needsInput: Bool { state == .liveIdle && idleReason == .needsInput }
     /// Idle and finished (or pending classification) — done, ready for you to review.
@@ -38,8 +53,10 @@ public struct ChatSession: Identifiable, Equatable {
 
     public init(sessionId: String, cwd: String, project: String, label: String,
                 state: SessionState, kind: String?, pid: Int32?, lastActive: Date,
-                branch: String? = nil, idleReason: IdleReason? = nil) {
-        self.sessionId = sessionId; self.cwd = cwd; self.project = project
+                branch: String? = nil, idleReason: IdleReason? = nil,
+                agent: AgentKind = .claude, transcriptPath: String? = nil) {
+        self.sessionId = sessionId; self.agent = agent; self.transcriptPath = transcriptPath
+        self.cwd = cwd; self.project = project
         self.label = label; self.branch = branch; self.state = state; self.kind = kind
         self.pid = pid; self.lastActive = lastActive; self.idleReason = idleReason
     }
@@ -47,7 +64,8 @@ public struct ChatSession: Identifiable, Equatable {
     public func with(idleReason: IdleReason?) -> ChatSession {
         ChatSession(sessionId: sessionId, cwd: cwd, project: project, label: label,
                     state: state, kind: kind, pid: pid, lastActive: lastActive,
-                    branch: branch, idleReason: idleReason)
+                    branch: branch, idleReason: idleReason,
+                    agent: agent, transcriptPath: transcriptPath)
     }
 
     /// A dead (cold) copy — for optimistic UI after we kill the process ourselves,
@@ -55,7 +73,8 @@ public struct ChatSession: Identifiable, Equatable {
     public func markedDead() -> ChatSession {
         ChatSession(sessionId: sessionId, cwd: cwd, project: project, label: label,
                     state: .cold, kind: nil, pid: nil, lastActive: lastActive,
-                    branch: branch, idleReason: nil)
+                    branch: branch, idleReason: nil,
+                    agent: agent, transcriptPath: transcriptPath)
     }
 
     /// Synthetic row for an empty project group — selectable so ⌘N / Enter has somewhere
@@ -74,11 +93,12 @@ public struct ChatSession: Identifiable, Equatable {
 public struct LiveRecord: Equatable {
     public let pid: Int32
     public let sessionId: String
+    public let agent: AgentKind
     public let kind: String?
     public let status: String?       // "busy" / "idle"
     public let name: String?
-    public init(pid: Int32, sessionId: String, kind: String?, status: String?, name: String?) {
-        self.pid = pid; self.sessionId = sessionId; self.kind = kind
+    public init(pid: Int32, sessionId: String, kind: String?, status: String?, name: String?, agent: AgentKind = .claude) {
+        self.pid = pid; self.sessionId = sessionId; self.agent = agent; self.kind = kind
         self.status = status; self.name = name
     }
 }
@@ -86,14 +106,18 @@ public struct LiveRecord: Equatable {
 /// A session transcript, read from ~/.claude/projects/*/<sessionId>.jsonl.
 public struct HistoryRecord: Equatable {
     public let sessionId: String
+    public let agent: AgentKind
+    public let transcriptPath: String?
     public let cwd: String?
     public let gitBranch: String?
     public let aiTitle: String?
     public let entrypoint: String?   // "cli" = user-started; "sdk-py" etc = automation
     public let lastActive: Date
     public init(sessionId: String, cwd: String?, gitBranch: String?, aiTitle: String?,
-                entrypoint: String? = nil, lastActive: Date) {
-        self.sessionId = sessionId; self.cwd = cwd; self.gitBranch = gitBranch
+                entrypoint: String? = nil, lastActive: Date,
+                agent: AgentKind = .claude, transcriptPath: String? = nil) {
+        self.sessionId = sessionId; self.agent = agent; self.transcriptPath = transcriptPath
+        self.cwd = cwd; self.gitBranch = gitBranch
         self.aiTitle = aiTitle; self.entrypoint = entrypoint; self.lastActive = lastActive
     }
 }

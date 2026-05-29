@@ -5,16 +5,32 @@ import HelmCore
 enum TerminalDispatcher {
     /// Resume a session. For a live row (`pid` set) whose process still owns a terminal
     /// tab, focus that tab instead of spawning a fresh `claude --resume`.
-    static func resume(sessionId: String, cwd: String?, pid: Int32? = nil) {
-        if let pid, let tty = ttyForPID(pid), focusTab(tty: tty) {
+    static func resume(_ session: ChatSession) {
+        if let pid = session.pid, let tty = ttyForPID(pid), focusTab(tty: tty) {
             return
         }
-        let dir = cwd?.nonEmpty ?? NSHomeDirectory()
-        run("cd \(shellQuote(dir)) && claude --resume \(shellQuote(sessionId))")
+        let dir = session.cwd.nonEmpty ?? NSHomeDirectory()
+        switch session.agent {
+        case .claude:
+            run("cd \(shellQuote(dir)) && claude --resume \(shellQuote(session.sessionId))")
+        case .pi:
+            let target = session.transcriptPath ?? session.sessionId
+            run("cd \(shellQuote(dir)) && pi --session \(shellQuote(target))")
+        }
     }
 
-    static func newChat(cwd: String) {
-        run("cd \(shellQuote(cwd)) && claude")
+    static func resume(sessionId: String, cwd: String?, pid: Int32? = nil) {
+        let dir = cwd?.nonEmpty ?? NSHomeDirectory()
+        resume(ChatSession(sessionId: sessionId, cwd: dir, project: "Other", label: sessionId,
+                           state: pid == nil ? .cold : .liveIdle, kind: nil, pid: pid,
+                           lastActive: Date()))
+    }
+
+    static func newChat(cwd: String, agent: AgentKind = HelmConfig.load().defaultAgent) {
+        switch agent {
+        case .claude: run("cd \(shellQuote(cwd)) && claude")
+        case .pi: run("cd \(shellQuote(cwd)) && pi")
+        }
     }
 
     /// Close the terminal pane whose session owns `pid`'s controlling tty. No-op for a

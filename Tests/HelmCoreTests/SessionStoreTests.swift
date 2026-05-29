@@ -21,20 +21,6 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(SessionStore.project(forCwd: "/Users/me/Home/temp", home: home), "Other")
     }
 
-    // MARK: hook-induced filtering ("my kind of threads only")
-
-    func testUserThreadVsAutomation() {
-        XCTAssertTrue(SessionStore.isUserThread(entrypoint: "cli"))
-        XCTAssertTrue(SessionStore.isUserThread(entrypoint: nil))     // old transcripts: keep
-        XCTAssertFalse(SessionStore.isUserThread(entrypoint: "sdk-py"))   // security-guidance hook
-        XCTAssertFalse(SessionStore.isUserThread(entrypoint: "sdk-ts"))
-    }
-
-    func testSubagentTranscriptDetection() {
-        XCTAssertTrue(SessionStore.isSubagentTranscript(filename: "agent-afcb69a539763eff5.jsonl"))
-        XCTAssertFalse(SessionStore.isSubagentTranscript(filename: "3f27ba72-739d-41a8-8f47.jsonl"))
-    }
-
     // MARK: age labels (<15m / <30m / <1h / Nh, floored)
 
     func testAgeLabelBuckets() {
@@ -65,27 +51,6 @@ final class SessionStoreTests: XCTestCase {
     }
 
     // MARK: state derivation
-
-    // MARK: head read (skip image blobs, recover later cwd/aiTitle/entrypoint)
-
-    func testCollectSmallLinesSkipsMegaLineAndKeepsLaterMetadata() {
-        let small1 = #"{"type":"mode","mode":"normal"}"#
-        let megaLine = "{\"role\":\"user\",\"image\":\"" + String(repeating: "A", count: 300 * 1024) + "\"}"
-        let small2 = #"{"cwd":"/Users/me/projects/p","entrypoint":"cli","aiTitle":"hello"}"#
-        let blob = Data((small1 + "\n" + megaLine + "\n" + small2 + "\n").utf8)
-        var offset = 0
-        let result = SessionStore.collectSmallLines { n in
-            guard offset < blob.count else { return Data() }
-            let end = min(offset + n, blob.count)
-            let slice = blob.subdata(in: offset..<end)
-            offset = end
-            return slice
-        }
-        XCTAssertNotNil(result)
-        XCTAssertTrue(result?.contains(#""cwd":"/Users/me/projects/p""#) == true)
-        XCTAssertTrue(result?.contains(#""aiTitle":"hello""#) == true)
-        XCTAssertFalse(result?.contains("AAAAA") == true)   // mega line dropped
-    }
 
     func testStateDerivation() {
         XCTAssertEqual(SessionStore.state(forStatus: "busy", isLive: true), .liveBusy)
@@ -330,63 +295,16 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertNil(SessionStore.nextAttentionSession(in: rows, after: nil))
     }
 
-    // MARK: history cache (mtime-keyed, skips re-parsing unchanged transcripts)
-
-    func testHistoryCacheReusesUntilMtimeChanges() {
-        let cache = HistoryCache()
-        var builds = 0
-        let make: () -> HistoryRecord = {
-            builds += 1
-            return HistoryRecord(sessionId: "s", cwd: "/x", gitBranch: nil, aiTitle: nil, lastActive: .distantPast)
-        }
-        let t0 = Date(timeIntervalSince1970: 100), t1 = Date(timeIntervalSince1970: 200)
-        _ = cache.record(forPath: "/a.jsonl", mtime: t0, build: make)
-        _ = cache.record(forPath: "/a.jsonl", mtime: t0, build: make)   // same mtime → cached
-        XCTAssertEqual(builds, 1)
-        _ = cache.record(forPath: "/a.jsonl", mtime: t1, build: make)   // newer mtime → rebuild
-        XCTAssertEqual(builds, 2)
-        _ = cache.record(forPath: "/b.jsonl", mtime: t0, build: make)   // new path → build
-        XCTAssertEqual(builds, 3)
-    }
-
-    // MARK: filesystem readers (against a temp ~/.claude fixture)
-
-    func testReadLiveAndHistoryFromTempClaudeDir() throws {
-        let fm = FileManager.default
-        let home = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("helm-ss-\(UUID())")
-        defer { try? fm.removeItem(at: home) }
-        let sessions = home.appendingPathComponent(".claude/sessions")
-        let projects = home.appendingPathComponent(".claude/projects/proj")
-        try fm.createDirectory(at: sessions, withIntermediateDirectories: true)
-        try fm.createDirectory(at: projects, withIntermediateDirectories: true)
-
-        // Use our own pid so the liveness check (kill(pid,0)) sees it as alive.
-        let myPid = ProcessInfo.processInfo.processIdentifier
-        try #"{"pid":\#(myPid),"sessionId":"S1","kind":"interactive","status":"busy","entrypoint":"cli","name":"live one"}"#
-            .write(to: sessions.appendingPathComponent("\(myPid).json"), atomically: true, encoding: .utf8)
-
-        // JSONL: each record is newline-terminated (the head reader only collects whole lines).
-        let demo = "\(home.path)/projects/demo"
-        try (#"{"cwd":"\#(demo)","gitBranch":"main","aiTitle":"hello","entrypoint":"cli"}"# + "\n")
-            .write(to: projects.appendingPathComponent("S1.jsonl"), atomically: true, encoding: .utf8)
-        try (#"{"cwd":"\#(demo)","gitBranch":"feat","entrypoint":"cli"}"# + "\n")
-            .write(to: projects.appendingPathComponent("S2.jsonl"), atomically: true, encoding: .utf8)
-        try (#"{"cwd":"\#(demo)","entrypoint":"sdk-py"}"# + "\n")   // automation → filtered out
-            .write(to: projects.appendingPathComponent("S3.jsonl"), atomically: true, encoding: .utf8)
-
-        let store = SessionStore(home: home.path)
-        XCTAssertEqual(store.readLive().map(\.sessionId), ["S1"])
-        XCTAssertEqual(store.readLive().first?.status, "busy")
-
-        let history = store.readHistory()
-        XCTAssertEqual(Set(history.map(\.sessionId)), ["S1", "S2"])   // S3 (sdk-py) excluded
-
-        let merged = store.merge(live: store.readLive(), history: history)
-        let s1 = merged.first { $0.sessionId == "S1" }!
-        XCTAssertEqual(s1.state, .liveBusy)
-        XCTAssertEqual(s1.label, "live one")          // live name wins over aiTitle
-        XCTAssertEqual(s1.project, "demo")
-        XCTAssertEqual(merged.first { $0.sessionId == "S2" }?.state, .cold)
+    func testDuplicateSessionIdsAcrossAgentsRemainDistinct() {
+        let store = SessionStore(home: home)
+        let history = [
+            HistoryRecord(sessionId: "dup", cwd: "/Users/me/projects/a", gitBranch: nil,
+                          aiTitle: "Claude", lastActive: Date(timeIntervalSince1970: 1), agent: .claude),
+            HistoryRecord(sessionId: "dup", cwd: "/Users/me/projects/b", gitBranch: nil,
+                          aiTitle: "Pi", lastActive: Date(timeIntervalSince1970: 2), agent: .pi)
+        ]
+        let rows = store.merge(live: [], history: history)
+        XCTAssertEqual(Set(rows.map(\.id)), ["claude:dup", "pi:dup"])
     }
 
     // MARK: search

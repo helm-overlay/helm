@@ -111,7 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if session.isPlaceholder {
             TerminalDispatcher.newChat(cwd: session.cwd)
         } else {
-            TerminalDispatcher.resume(sessionId: session.sessionId, cwd: session.cwd, pid: session.pid)
+            TerminalDispatcher.resume(session)
         }
     }
 
@@ -132,7 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let next else { NSSound.beep(); return }
                 self.jumpCursor = next.sessionId
                 if self.panel.isVisible { self.hide() }
-                TerminalDispatcher.resume(sessionId: next.sessionId, cwd: next.cwd, pid: next.pid)
+                TerminalDispatcher.resume(next)
             }
         }
     }

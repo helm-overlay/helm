@@ -55,12 +55,19 @@ public struct HelmConfig: Equatable {
     /// 0 or negative disables the cutoff (show everything).
     public var hideOlderThanDays: Int
     public var taskEditor: TaskEditor
+    public var enabledAgents: [AgentKind]
+    public var defaultAgent: AgentKind
 
     public init(terminal: TerminalKind = .default, hideOlderThanDays: Int = 1,
-                taskEditor: TaskEditor = .default) {
+                taskEditor: TaskEditor = .default,
+                enabledAgents: [AgentKind] = [.claude],
+                defaultAgent: AgentKind = .claude) {
+        let uniqueEnabled = Self.normalizedAgents(enabledAgents)
         self.terminal = terminal
         self.hideOlderThanDays = hideOlderThanDays
         self.taskEditor = taskEditor
+        self.enabledAgents = uniqueEnabled
+        self.defaultAgent = uniqueEnabled.contains(defaultAgent) ? defaultAgent : uniqueEnabled[0]
     }
 
     /// Cutoff as a duration; 0 if disabled.
@@ -80,6 +87,24 @@ public struct HelmConfig: Equatable {
         return HelmConfig(
             terminal: TerminalKind(parsing: obj["terminal"] as? String),
             hideOlderThanDays: (obj["hideOlderThanDays"] as? Int) ?? HelmConfig().hideOlderThanDays,
-            taskEditor: TaskEditor(parsing: obj["taskEditor"]))
+            taskEditor: TaskEditor(parsing: obj["taskEditor"]),
+            enabledAgents: parseAgents(obj["enabledAgents"]),
+            defaultAgent: parseAgent(obj["defaultAgent"]) ?? .claude)
+    }
+
+    private static func parseAgent(_ raw: Any?) -> AgentKind? {
+        guard let s = raw as? String else { return nil }
+        return AgentKind(rawValue: s.lowercased())
+    }
+
+    private static func parseAgents(_ raw: Any?) -> [AgentKind] {
+        guard let values = raw as? [String] else { return [.claude] }
+        return normalizedAgents(values.compactMap { AgentKind(rawValue: $0.lowercased()) })
+    }
+
+    private static func normalizedAgents(_ agents: [AgentKind]) -> [AgentKind] {
+        var seen = Set<AgentKind>()
+        let unique = agents.filter { seen.insert($0).inserted }
+        return unique.isEmpty ? [.claude] : unique
     }
 }
