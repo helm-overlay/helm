@@ -122,7 +122,7 @@ func cmdNew(_ args: [String]) {
     guard let name = args.first, args.count == 1 else {
         die("usage: project new <name>")
     }
-    let syntax = ProjectCreator.validateNameSyntax(name)
+    let syntax = ProjectManager.validateNameSyntax(name)
     if syntax != .ok {
         die("invalid project name '\(name)': \(describeNameError(syntax))")
     }
@@ -156,7 +156,7 @@ func cmdNew(_ args: [String]) {
     }
 }
 
-func describeNameError(_ v: ProjectCreator.NameValidation) -> String {
+func describeNameError(_ v: ProjectManager.NameValidation) -> String {
     switch v {
     case .ok: return "ok"
     case .empty: return "name is empty"

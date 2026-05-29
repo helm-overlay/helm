@@ -72,7 +72,7 @@ struct ProjectCreateView: View {
     }
 
     @ViewBuilder
-    private func statusBadge(for v: ProjectCreator.NameValidation) -> some View {
+    private func statusBadge(for v: ProjectManager.NameValidation) -> some View {
         switch v {
         case .ok:
             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
@@ -131,7 +131,7 @@ struct ProjectCreateView: View {
         }
     }
 
-    private func result(for rowId: UUID) -> ProjectCreator.RepoResult? {
+    private func result(for rowId: UUID) -> ProjectManager.RepoResult? {
         guard !model.results.isEmpty,
               let idx = model.rows.firstIndex(where: { $0.id == rowId }) else { return nil }
         let nonBlankIndices = model.rows.enumerated()
@@ -193,7 +193,7 @@ private struct RepoRow: View {
     let repoTopMatch: String?
     let branchSuggestions: [String]
     let branchTopMatch: String?
-    let result: ProjectCreator.RepoResult?
+    let result: ProjectManager.RepoResult?
     let onRemove: () -> Void
     let onTouched: () -> Void
     let onRepoResolved: (String) -> Void

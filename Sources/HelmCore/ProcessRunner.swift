@@ -1,7 +1,7 @@
 import Foundation
 
 /// Thin seam over `Process` so tests can stub git/CLI invocations without spawning real
-/// processes. Shared by `ProjectManager` and `ProjectCreator`.
+/// processes. Shared by `ProjectManager` and the `project` CLI.
 public struct ProcessRunner {
     public struct Result: Equatable {
         public let status: Int32

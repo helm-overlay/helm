@@ -1,22 +1,22 @@
 import Foundation
 import HelmCore
 
-/// State for the new-project form. Owns its own ProjectCreator; the view talks to it
+/// State for the new-project form. Owns its own ProjectManager; the view talks to it
 /// only through @Published values and three intents: addRow / removeRow / submit.
 @MainActor
 final class ProjectCreateViewModel: ObservableObject {
     @Published var name: String = ""
     @Published var rows: [Row] = [Row()]
-    @Published var nameStatus: ProjectCreator.NameValidation = .empty
+    @Published var nameStatus: ProjectManager.NameValidation = .empty
     @Published var isSubmitting: Bool = false
-    @Published var results: [ProjectCreator.RepoResult] = []
+    @Published var results: [ProjectManager.RepoResult] = []
     @Published var submitError: String?
     /// Local branches per resolved repo. Loaded lazily as rows resolve to a real repo
     /// (see `ensureBranches`); used for the same `→ <match>` hint as the repo field.
     @Published var branches: [String: [String]] = [:]
 
     let availableRepos: [String]
-    private let creator: ProjectCreator
+    private let manager: ProjectManager
 
     struct Row: Identifiable, Equatable {
         let id = UUID()
@@ -24,16 +24,16 @@ final class ProjectCreateViewModel: ObservableObject {
         var branch: String = ""
     }
 
-    init(creator: ProjectCreator = ProjectCreator()) {
-        self.creator = creator
-        self.availableRepos = creator.listAvailableRepos()
+    init(manager: ProjectManager = ProjectManager()) {
+        self.manager = manager
+        self.availableRepos = manager.listAvailableRepos()
         revalidateName()
     }
 
     // MARK: Intents
 
     func revalidateName() {
-        nameStatus = creator.validateName(name)
+        nameStatus = manager.validateName(name)
         clearResults()
     }
 
@@ -84,9 +84,9 @@ final class ProjectCreateViewModel: ObservableObject {
     func ensureBranches(forResolvedRepo resolvedRepo: String) {
         guard branches[resolvedRepo] == nil else { return }
         branches[resolvedRepo] = []   // claim the slot so we don't re-fetch in a tight loop
-        let creator = self.creator
+        let manager = self.manager
         _Concurrency.Task.detached(priority: .userInitiated) {
-            let list = creator.listBranches(repo: resolvedRepo)
+            let list = manager.listBranches(repo: resolvedRepo)
             await MainActor.run { self.branches[resolvedRepo] = list }
         }
     }
@@ -107,11 +107,11 @@ final class ProjectCreateViewModel: ObservableObject {
     func submit() async -> URL? {
         guard canSubmit else { return nil }
         let projectName = self.name
-        let specs: [ProjectCreator.RepoSpec] = rows.compactMap { row in
+        let specs: [ProjectManager.RepoSpec] = rows.compactMap { row in
             guard !row.repo.isEmpty,
                   let resolved = topMatch(forRepo: row.repo) else { return nil }
             let branch = row.branch.isEmpty ? projectName : row.branch
-            return ProjectCreator.RepoSpec(repo: resolved, branch: branch)
+            return ProjectManager.RepoSpec(repo: resolved, branch: branch)
         }
 
         isSubmitting = true
@@ -119,12 +119,12 @@ final class ProjectCreateViewModel: ObservableObject {
         results = []
         defer { isSubmitting = false }
 
-        let creator = self.creator
+        let manager = self.manager
         let name = self.name
-        let outcome: ProjectCreator.Outcome
+        let outcome: ProjectManager.Outcome
         do {
             outcome = try await _Concurrency.Task.detached(priority: .userInitiated) {
-                try creator.create(name: name, repos: specs)
+                try manager.create(name: name, repos: specs)
             }.value
         } catch {
             submitError = "\(error)"

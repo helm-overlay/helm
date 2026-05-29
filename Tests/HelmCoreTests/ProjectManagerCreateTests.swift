@@ -1,22 +1,22 @@
 import XCTest
 @testable import HelmCore
 
-final class ProjectCreatorTests: XCTestCase {
+final class ProjectManagerCreateTests: XCTestCase {
     // MARK: Name validation
 
     func testNameSyntaxRules() {
-        XCTAssertEqual(ProjectCreator.validateNameSyntax(""), .empty)
-        XCTAssertEqual(ProjectCreator.validateNameSyntax("claude-projects"), .ok)
-        XCTAssertEqual(ProjectCreator.validateNameSyntax("a"), .ok)
-        XCTAssertEqual(ProjectCreator.validateNameSyntax("9-lives"), .ok)
-        XCTAssertEqual(ProjectCreator.validateNameSyntax("Claude"), .notKebabCase)        // uppercase
-        XCTAssertEqual(ProjectCreator.validateNameSyntax("foo_bar"), .notKebabCase)       // underscore
-        XCTAssertEqual(ProjectCreator.validateNameSyntax("foo.bar"), .notKebabCase)       // dot
-        XCTAssertEqual(ProjectCreator.validateNameSyntax("foo/bar"), .notKebabCase)       // slash
-        XCTAssertEqual(ProjectCreator.validateNameSyntax("-foo"), .notKebabCase)          // leading hyphen
-        XCTAssertEqual(ProjectCreator.validateNameSyntax("foo-"), .notKebabCase)          // trailing hyphen
-        XCTAssertEqual(ProjectCreator.validateNameSyntax("foo--bar"), .notKebabCase)      // double hyphen
-        XCTAssertEqual(ProjectCreator.validateNameSyntax("foo bar"), .notKebabCase)       // space
+        XCTAssertEqual(ProjectManager.validateNameSyntax(""), .empty)
+        XCTAssertEqual(ProjectManager.validateNameSyntax("claude-projects"), .ok)
+        XCTAssertEqual(ProjectManager.validateNameSyntax("a"), .ok)
+        XCTAssertEqual(ProjectManager.validateNameSyntax("9-lives"), .ok)
+        XCTAssertEqual(ProjectManager.validateNameSyntax("Claude"), .notKebabCase)        // uppercase
+        XCTAssertEqual(ProjectManager.validateNameSyntax("foo_bar"), .notKebabCase)       // underscore
+        XCTAssertEqual(ProjectManager.validateNameSyntax("foo.bar"), .notKebabCase)       // dot
+        XCTAssertEqual(ProjectManager.validateNameSyntax("foo/bar"), .notKebabCase)       // slash
+        XCTAssertEqual(ProjectManager.validateNameSyntax("-foo"), .notKebabCase)          // leading hyphen
+        XCTAssertEqual(ProjectManager.validateNameSyntax("foo-"), .notKebabCase)          // trailing hyphen
+        XCTAssertEqual(ProjectManager.validateNameSyntax("foo--bar"), .notKebabCase)      // double hyphen
+        XCTAssertEqual(ProjectManager.validateNameSyntax("foo bar"), .notKebabCase)       // space
     }
 
     func testCollisionDetected() throws {
@@ -24,8 +24,8 @@ final class ProjectCreatorTests: XCTestCase {
         defer { env.cleanup() }
         try FileManager.default.createDirectory(at: env.projectsRoot.appendingPathComponent("alpha"),
                                                 withIntermediateDirectories: true)
-        XCTAssertEqual(env.creator.validateName("alpha"), .collides)
-        XCTAssertEqual(env.creator.validateName("beta"), .ok)
+        XCTAssertEqual(env.manager.validateName("alpha"), .collides)
+        XCTAssertEqual(env.manager.validateName("beta"), .ok)
     }
 
     // MARK: Available repos
@@ -38,7 +38,7 @@ final class ProjectCreatorTests: XCTestCase {
         try fm.createDirectory(at: env.reposRoot.appendingPathComponent("realmobile"), withIntermediateDirectories: true)
         try fm.createDirectory(at: env.reposRoot.appendingPathComponent(".cache"), withIntermediateDirectories: true)
         try "x".write(to: env.reposRoot.appendingPathComponent("README"), atomically: true, encoding: .utf8)
-        XCTAssertEqual(env.creator.listAvailableRepos(), ["mobile", "realmobile"])
+        XCTAssertEqual(env.manager.listAvailableRepos(), ["mobile", "realmobile"])
     }
 
     // MARK: Bare-project create
@@ -46,7 +46,7 @@ final class ProjectCreatorTests: XCTestCase {
     func testBareCreateCopiesTemplateAndSubstitutesName() throws {
         let env = try makeEnv()
         defer { env.cleanup() }
-        let outcome = try env.creator.create(name: "demo", repos: [])
+        let outcome = try env.manager.create(name: "demo", repos: [])
         XCTAssertTrue(outcome.allSucceeded)
         XCTAssertEqual(outcome.projectRoot.path, env.projectsRoot.appendingPathComponent("demo").path)
 
@@ -61,8 +61,8 @@ final class ProjectCreatorTests: XCTestCase {
     func testCreateRejectsInvalidName() throws {
         let env = try makeEnv()
         defer { env.cleanup() }
-        XCTAssertThrowsError(try env.creator.create(name: "Bad_Name", repos: [])) { err in
-            guard case ProjectCreator.CreateError.invalidName(let v) = err else { return XCTFail("wrong error: \(err)") }
+        XCTAssertThrowsError(try env.manager.create(name: "Bad_Name", repos: [])) { err in
+            guard case ProjectManager.CreateError.invalidName(let v) = err else { return XCTFail("wrong error: \(err)") }
             XCTAssertEqual(v, .notKebabCase)
         }
     }
@@ -70,8 +70,8 @@ final class ProjectCreatorTests: XCTestCase {
     func testCreateRejectsMissingTemplate() throws {
         let env = try makeEnv(makeTemplate: false)
         defer { env.cleanup() }
-        XCTAssertThrowsError(try env.creator.create(name: "demo", repos: [])) { err in
-            guard case ProjectCreator.CreateError.templateMissing = err else { return XCTFail("wrong error: \(err)") }
+        XCTAssertThrowsError(try env.manager.create(name: "demo", repos: [])) { err in
+            guard case ProjectManager.CreateError.templateMissing = err else { return XCTFail("wrong error: \(err)") }
         }
     }
 
@@ -97,7 +97,7 @@ final class ProjectCreatorTests: XCTestCase {
             }
             return .init(status: 1, stderr: "unexpected: \(args)")
         }
-        let outcome = try env.creator.create(name: "demo",
+        let outcome = try env.manager.create(name: "demo",
                                              repos: [.init(repo: "mobile", branch: "feature-x")])
         XCTAssertTrue(outcome.allSucceeded)
         XCTAssertEqual(outcome.repos[0].result,
@@ -120,7 +120,7 @@ final class ProjectCreatorTests: XCTestCase {
             if args[1] == "worktree" { return .init(status: 0) }
             return .init(status: 1, stderr: "unexpected: \(args)")
         }
-        let outcome = try env.creator.create(name: "demo",
+        let outcome = try env.manager.create(name: "demo",
                                              repos: [.init(repo: "mobile", branch: "feature-x")])
         XCTAssertEqual(outcome.repos[0].result,
                        .success(branch: "feature-x", createdBranch: true, base: "main"))
@@ -135,7 +135,7 @@ final class ProjectCreatorTests: XCTestCase {
             if args[1] == "worktree" { worktreeArgs = args; return .init(status: 0) }
             return .init(status: 1)
         }
-        let outcome = try env.creator.create(name: "demo",
+        let outcome = try env.manager.create(name: "demo",
                                              repos: [.init(repo: "mobile", branch: "existing")])
         XCTAssertEqual(outcome.repos[0].result,
                        .success(branch: "existing", createdBranch: false, base: nil))
@@ -159,7 +159,7 @@ final class ProjectCreatorTests: XCTestCase {
             }
             return .init(status: 1)
         }
-        let outcome = try env.creator.create(name: "demo", repos: [
+        let outcome = try env.manager.create(name: "demo", repos: [
             .init(repo: "mobile", branch: "feature-x"),
             .init(repo: "realmobile", branch: "feature-x"),
         ])
@@ -183,7 +183,7 @@ final class ProjectCreatorTests: XCTestCase {
             if args[1] == "worktree" { worktreeCwd = cwd; return .init(status: 0) }
             return .init(status: 1)
         }
-        let outcome = try env.creator.create(name: "demo", repos: [.init(repo: "helm", branch: "feat")])
+        let outcome = try env.manager.create(name: "demo", repos: [.init(repo: "helm", branch: "feat")])
         XCTAssertTrue(outcome.allSucceeded)
         XCTAssertEqual(worktreeCwd, env.utilsRoot.appendingPathComponent("helm").path)
     }
@@ -195,14 +195,14 @@ final class ProjectCreatorTests: XCTestCase {
         try fm.createDirectory(at: env.reposRoot.appendingPathComponent("mobile"), withIntermediateDirectories: true)
         try fm.createDirectory(at: env.utilsRoot.appendingPathComponent("helm"), withIntermediateDirectories: true)
         try fm.createDirectory(at: env.utilsRoot.appendingPathComponent("mobile"), withIntermediateDirectories: true) // dup
-        XCTAssertEqual(env.creator.listAvailableRepos(), ["helm", "mobile"])   // deduped, sorted
+        XCTAssertEqual(env.manager.listAvailableRepos(), ["helm", "mobile"])   // deduped, sorted
     }
 
     func testMissingRepoReportedPerRow() throws {
         let env = try makeEnv(repos: ["mobile"])
         defer { env.cleanup() }
         env.installRunner { _, _, _ in .init(status: 0) }
-        let outcome = try env.creator.create(name: "demo", repos: [
+        let outcome = try env.manager.create(name: "demo", repos: [
             .init(repo: "ghost", branch: "feature-x"),
         ])
         guard case .failed(let msg) = outcome.repos[0].result else { return XCTFail("expected failure") }
@@ -226,8 +226,8 @@ final class ProjectCreatorTests: XCTestCase {
             self.utilsRoot = utilsRoot
             self.runner = ProcessRunner { _, _, _ in .init(status: 0) }
         }
-        var creator: ProjectCreator {
-            ProjectCreator(home: home.path, projectsRoot: projectsRoot,
+        var manager: ProjectManager {
+            ProjectManager(home: home.path, projectsRoot: projectsRoot,
                            templateDir: templateDir, repoRoots: [reposRoot, utilsRoot],
                            runner: runner)
         }

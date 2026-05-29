@@ -2,7 +2,7 @@ import Foundation
 
 /// Single source of truth for project + worktree operations. Used by:
 ///   • the `project` CLI (Sources/ProjectCLI)
-///   • the Mac app's New Project view via `ProjectCreator`
+///   • the Mac app's New Project view (Sources/Helm)
 ///
 /// All process invocations go through `ProcessRunner` (in `ProcessRunner.swift`) so tests
 /// can stub git calls.
@@ -42,6 +42,34 @@ public struct ProjectManager {
         self.repoRoots = repoRoots
         self.runner = runner
         self.fm = fm
+    }
+
+    // MARK: Name validation
+
+    public enum NameValidation: Equatable {
+        case ok
+        case empty
+        case notKebabCase
+        case collides
+    }
+
+    /// Pure-syntax check (no filesystem). Lowercase letters/digits/hyphens, must start
+    /// with a letter or digit. Used live as the user types.
+    public static func validateNameSyntax(_ name: String) -> NameValidation {
+        if name.isEmpty { return .empty }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789-")
+        if name.unicodeScalars.contains(where: { !allowed.contains($0) }) { return .notKebabCase }
+        guard let first = name.first, first.isLetter || first.isNumber else { return .notKebabCase }
+        if name.hasSuffix("-") || name.contains("--") { return .notKebabCase }
+        return .ok
+    }
+
+    /// Syntax + collision check against `~/projects/<name>/`. Use at submit time.
+    public func validateName(_ name: String) -> NameValidation {
+        let syntax = Self.validateNameSyntax(name)
+        guard syntax == .ok else { return syntax }
+        let target = projectsRoot.appendingPathComponent(name)
+        return fm.fileExists(atPath: target.path) ? .collides : .ok
     }
 
     // MARK: Project root discovery
@@ -352,7 +380,7 @@ public struct ProjectManager {
     // MARK: Project creation
 
     public enum NewProjectError: Error, Equatable {
-        case invalidName(ProjectCreator.NameValidation)
+        case invalidName(NameValidation)
         case templateMissing(URL)
         case alreadyExists(URL)
         case copyFailed(String)
@@ -362,7 +390,7 @@ public struct ProjectManager {
     /// Creates a new project root from `templateDir`, replaces `<project-name>` tokens
     /// in PROJECT.md. Returns the project root path on success.
     public func newProject(name: String) -> Result<URL, NewProjectError> {
-        let syntax = ProjectCreator.validateNameSyntax(name)
+        let syntax = Self.validateNameSyntax(name)
         guard syntax == .ok else { return .failure(.invalidName(syntax)) }
         let target = projectsRoot.appendingPathComponent(name)
         if fm.fileExists(atPath: target.path) {
@@ -389,6 +417,129 @@ public struct ProjectManager {
             }
         }
         return .success(target)
+    }
+
+    // MARK: Repo discovery (New Project form)
+
+    /// First repo root holding a direct-child directory named `repo`, else nil. Unlike
+    /// `resolveRepo`, this is dir-existence only (no git check) — it's the source lookup for
+    /// a brand-new project's worktrees, where `git worktree add` does its own validation.
+    public func resolveRepoPath(_ repo: String) -> URL? {
+        for root in repoRoots {
+            let p = root.appendingPathComponent(repo)
+            if isDir(p) { return p }
+        }
+        return nil
+    }
+
+    /// Local branches for a repo (resolved across the repo roots). Returns [] if the repo
+    /// is missing or git fails. Sorted.
+    public func listBranches(repo: String) -> [String] {
+        guard let repoPath = resolveRepoPath(repo) else { return [] }
+        let r = runner.run("/usr/bin/env",
+                           ["git", "for-each-ref", "--format=%(refname:short)", "refs/heads/"],
+                           repoPath.path)
+        guard r.status == 0 else { return [] }
+        return r.stdout
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+            .filter { !$0.isEmpty }
+            .sorted()
+    }
+
+    /// Direct-child folder names across all repo roots, deduped (first root wins) and
+    /// sorted. Skips dotfiles and non-dirs.
+    public func listAvailableRepos() -> [String] {
+        var seen = Set<String>(), out: [String] = []
+        for root in repoRoots {
+            guard let entries = try? fm.contentsOfDirectory(at: root,
+                includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
+            else { continue }
+            for e in entries where (try? e.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                if seen.insert(e.lastPathComponent).inserted { out.append(e.lastPathComponent) }
+            }
+        }
+        return out.sorted()
+    }
+
+    // MARK: Project create (template + per-repo worktrees)
+
+    public struct RepoSpec: Equatable {
+        public let repo: String      // direct-child folder name under one of the repo roots
+        public let branch: String
+        public init(repo: String, branch: String) {
+            self.repo = repo
+            self.branch = branch
+        }
+    }
+
+    public enum RepoResult: Equatable {
+        /// Worktree added. `createdBranch` true → new branch off `base`; false → attached existing.
+        case success(branch: String, createdBranch: Bool, base: String?)
+        case failed(message: String)
+    }
+
+    public struct Outcome {
+        public let projectRoot: URL
+        public let repos: [(spec: RepoSpec, result: RepoResult)]
+        public var allSucceeded: Bool {
+            repos.allSatisfy { if case .success = $0.result { return true } else { return false } }
+        }
+    }
+
+    public enum CreateError: Error, Equatable {
+        case invalidName(NameValidation)
+        case templateMissing(URL)
+        case copyFailed(String)
+        case tokenReplaceFailed(String)
+    }
+
+    /// Creates the project root + template + per-repo worktrees. Best-effort across repos:
+    /// each worktree is attempted independently; the project root is NOT rolled back on
+    /// per-repo failures. Shared by the GUI New-Project form and any scripted caller.
+    public func create(name: String, repos: [RepoSpec]) throws -> Outcome {
+        let nameStatus = validateName(name)
+        guard nameStatus == .ok else { throw CreateError.invalidName(nameStatus) }
+
+        let projectRoot: URL
+        switch newProject(name: name) {
+        case .success(let url):
+            projectRoot = url
+        case .failure(.invalidName(let v)):
+            throw CreateError.invalidName(v)
+        case .failure(.templateMissing(let url)):
+            throw CreateError.templateMissing(url)
+        case .failure(.alreadyExists):
+            throw CreateError.invalidName(.collides)
+        case .failure(.copyFailed(let msg)):
+            throw CreateError.copyFailed(msg)
+        case .failure(.tokenReplaceFailed(let msg)):
+            throw CreateError.tokenReplaceFailed(msg)
+        }
+
+        let results: [(spec: RepoSpec, result: RepoResult)] = repos.map { spec in
+            let target = projectRoot
+                .appendingPathComponent(spec.repo)
+                .appendingPathComponent(spec.branch)
+            guard let source = resolveRepoPath(spec.repo) else {
+                return (spec, .failed(message: "repo not found: \(spec.repo)"))
+            }
+            switch addWorktree(source: source, target: target, branch: spec.branch) {
+            case .success(let r):
+                return (spec, .success(branch: spec.branch,
+                                       createdBranch: !r.attachedExisting,
+                                       base: r.base))
+            case .failure(.noBaseBranch):
+                return (spec, .failed(message: "no master or main branch found to base \(spec.branch) on"))
+            case .failure(.gitFailed(let msg)):
+                return (spec, .failed(message: msg))
+            case .failure(.targetAlreadyExists(let url)):
+                return (spec, .failed(message: "target already exists at \(url.path)"))
+            case .failure(.sourceNotGitWorkingTree(let url)):
+                return (spec, .failed(message: "source is not a git working tree: \(url.path)"))
+            }
+        }
+        return Outcome(projectRoot: projectRoot, repos: results)
     }
 
     // MARK: Public lookups
