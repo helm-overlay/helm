@@ -447,7 +447,7 @@ public struct ProjectManager {
         return .success(target)
     }
 
-    // MARK: Repo discovery (New Project form)
+    // MARK: Repo discovery
 
     /// First repo root holding a direct-child directory named `repo`, else nil. Unlike
     /// `resolveRepo`, this is dir-existence only (no git check) — it's the source lookup for
@@ -524,7 +524,7 @@ public struct ProjectManager {
 
     /// Creates the project root + template + per-repo worktrees. Best-effort across repos:
     /// each worktree is attempted independently; the project root is NOT rolled back on
-    /// per-repo failures. Shared by the GUI New-Project form and any scripted caller.
+    /// per-repo failures.
     public func create(name: String, repos: [RepoSpec]) throws -> Outcome {
         let nameStatus = validateName(name)
         guard nameStatus == .ok else { throw CreateError.invalidName(nameStatus) }

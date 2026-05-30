@@ -56,9 +56,13 @@ func ok(_ msg: String)   { print("  \(green("✓")) \(msg)") }
 let helpEpilog = """
 examples:
   project new helm-redesign           Create a new project from template
+  project new helm-redesign helm      Create project and add helm@helm-redesign
+  project new helm-redesign helm:fix  Create project and add helm@fix
   project add helm bug-fix            Add helm@bug-fix as a worktree (bare name)
   project add helm                    Same, branch defaults to the project name
   project add ~/some/checkout fix     Same, by path
+  project repos                       List repos available for project new
+  project branches helm               List local branches for a repo
   project ls                          List worktrees in current project
                                       (or all projects if outside)
   project ls -a                       Always list all projects
@@ -82,8 +86,11 @@ let topHelp = """
 usage: project <command> [args]
 
 \(bold("commands:"))
-  new <name>                 create a new project from template
+  new <name> [repo[:branch] ...]
+                             create a project and optional initial worktrees
   add <repo> [<branch>]      add a repo+branch as a worktree (branch defaults to project name)
+  repos                      list repos available to new
+  branches <repo>            list local branches for a repo
   ls [-a]                    list worktrees (or all projects if outside)
   show                       print current project's summary
   rm [<repo>/<branch>] [-f]  remove a worktree
@@ -119,8 +126,8 @@ func requireProjectRoot() -> URL {
 // MARK: new
 
 func cmdNew(_ args: [String]) {
-    guard let name = args.first, args.count == 1 else {
-        die("usage: project new <name>")
+    guard let name = args.first else {
+        die("usage: project new <name> [repo[:branch] ...]")
     }
     let syntax = ProjectManager.validateNameSyntax(name)
     if syntax != .ok {
@@ -131,29 +138,72 @@ func cmdNew(_ args: [String]) {
         die("project '\(name)' already exists at \(target.path)")
     }
 
+    let specs = args.dropFirst().map { parseRepoSpec($0, defaultBranch: name) }
+
     info("creating project \(bold(name)) at \(target.path)")
-    switch mgr.newProject(name: name) {
-    case .success(let created):
-        ok("copied template")
-        let pmd = created.appendingPathComponent("PROJECT.md")
-        if (try? String(contentsOf: pmd, encoding: .utf8))?.contains("# \(name)") == true {
-            ok("set PROJECT.md heading")
-        }
-        print()
-        print("next:  cd \(created.path)")
-        print("       edit PROJECT.md (fill in 'What this project is')")
-        print("       project add <repo> <branch>")
-    case .failure(.alreadyExists(let url)):
-        die("project '\(name)' already exists at \(url.path)")
-    case .failure(.invalidName(let v)):
+    let outcome: ProjectManager.Outcome
+    do {
+        outcome = try mgr.create(name: name, repos: specs)
+    } catch ProjectManager.CreateError.invalidName(let v) {
         die("invalid name: \(describeNameError(v))")
-    case .failure(.templateMissing(let url)):
+    } catch ProjectManager.CreateError.templateMissing(let url) {
         die("template not found at \(url.path) — copy or create ~/projects/.template/ first")
-    case .failure(.copyFailed(let msg)):
+    } catch ProjectManager.CreateError.copyFailed(let msg) {
         die("copy failed: \(msg)")
-    case .failure(.tokenReplaceFailed(let msg)):
+    } catch ProjectManager.CreateError.tokenReplaceFailed(let msg) {
         die("token replace failed: \(msg)")
+    } catch {
+        die("\(error)")
     }
+
+    ok("copied template")
+    let pmd = outcome.projectRoot.appendingPathComponent("PROJECT.md")
+    if (try? String(contentsOf: pmd, encoding: .utf8))?.contains("# \(name)") == true {
+        ok("set PROJECT.md heading")
+    }
+
+    for item in outcome.repos {
+        switch item.result {
+        case .success(let branch, let createdBranch, let base):
+            if createdBranch {
+                ok("added \(item.spec.repo)/\(branch) — created off \(base ?? "base")")
+            } else {
+                ok("added \(item.spec.repo)/\(branch) — attached existing branch")
+            }
+            syncContext(for: item.spec, projectRoot: outcome.projectRoot)
+        case .failed(let message):
+            writeErr("  \(red("✗")) \(item.spec.repo)/\(item.spec.branch): \(message)\n")
+        }
+    }
+
+    print()
+    print("next:  cd \(outcome.projectRoot.path)")
+    print("       edit PROJECT.md (fill in 'What this project is')")
+    if specs.isEmpty {
+        print("       project add <repo> <branch>")
+    } else if !outcome.allSucceeded {
+        exit(1)
+    }
+}
+
+func parseRepoSpec(_ raw: String, defaultBranch: String) -> ProjectManager.RepoSpec {
+    let parts = raw.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+    let repo = String(parts[0])
+    let branch = parts.count == 2 ? String(parts[1]) : defaultBranch
+    guard !repo.isEmpty else { die("repo spec '\(raw)' is missing a repo name") }
+    guard !branch.isEmpty else { die("repo spec '\(raw)' is missing a branch name") }
+    guard !branch.contains("/") else { die("branch name '\(branch)' may not contain '/'") }
+    return ProjectManager.RepoSpec(repo: repo, branch: branch)
+}
+
+func syncContext(for spec: ProjectManager.RepoSpec, projectRoot: URL) {
+    let target = projectRoot
+        .appendingPathComponent(spec.repo)
+        .appendingPathComponent(spec.branch)
+    guard let source = mgr.resolveRepoPath(spec.repo) else { return }
+    for f in mgr.copyEnvFiles(from: source, to: target) { ok("copied \(spec.repo)/\(spec.branch)/\(f)") }
+    for l in mgr.symlinkClaude(from: source, to: target) { ok("symlinked \(spec.repo)/\(spec.branch)/.claude/\(l)") }
+    for l in mgr.symlinkRootContext(from: source, to: target) { ok("symlinked \(spec.repo)/\(spec.branch)/\(l)") }
 }
 
 func describeNameError(_ v: ProjectManager.NameValidation) -> String {
@@ -163,6 +213,31 @@ func describeNameError(_ v: ProjectManager.NameValidation) -> String {
     case .notKebabCase: return "name must be lowercase kebab-case (letters, digits, hyphens; start with letter/digit; no leading/trailing/double hyphen)"
     case .collides: return "directory already exists"
     }
+}
+
+// MARK: repos / branches
+
+func cmdRepos(_ args: [String]) {
+    guard args.isEmpty else { die("usage: project repos") }
+    let repos = mgr.listAvailableRepos()
+    if repos.isEmpty {
+        print("no repos found under ~/Home/dev/repos or ~/Home/dev/utils")
+        return
+    }
+    for repo in repos { print(repo) }
+}
+
+func cmdBranches(_ args: [String]) {
+    guard args.count == 1 else { die("usage: project branches <repo>") }
+    guard mgr.resolveRepoPath(args[0]) != nil else {
+        die("repo '\(args[0])' not found. Run `project repos` to list available repos.")
+    }
+    let branches = mgr.listBranches(repo: args[0])
+    if branches.isEmpty {
+        print("no local branches found for \(args[0])")
+        return
+    }
+    for branch in branches { print(branch) }
 }
 
 // MARK: add
@@ -453,6 +528,8 @@ if args.isEmpty {
 switch args[0] {
 case "new":         cmdNew(Array(args.dropFirst()))
 case "add":         cmdAdd(Array(args.dropFirst()))
+case "repos":       cmdRepos(Array(args.dropFirst()))
+case "branches":    cmdBranches(Array(args.dropFirst()))
 case "rm":          cmdRm(Array(args.dropFirst()))
 case "ls":          cmdLs(Array(args.dropFirst()))
 case "show":        cmdShow(Array(args.dropFirst()))

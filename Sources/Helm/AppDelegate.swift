@@ -14,7 +14,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let shell = AppShellModel()
     private let model = SessionListViewModel()
     private let tasksModel = TaskListViewModel()
-    private var newProjectModel = ProjectCreateViewModel()
     private var hotKey: GlobalHotKey?
     private var jumpHotKey: GlobalHotKey?
     private var keyMonitor: Any?
@@ -34,14 +33,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             shell: shell,
             sessions: model,
             tasks: tasksModel,
-            newProject: newProjectModel,
             onPickSession:       { [weak self] in self?.pick($0) },
             onNewChat:           { [weak self] in self?.newChat() },
             onOpenTask:          { [weak self] in self?.openTask($0) },
             onCycleTask:         { [weak self] in self?.tasksModel.cycleSelected() },
             onOpenSource:        { [weak self] in self?.openSource($0) },
-            onCancelNewProject:  { [weak self] in self?.dismissNewProject() },
-            onCreatedProject:    { [weak self] in self?.afterProjectCreated($0) },
             onDismiss:           { [weak self] in self?.hide() })
         panel = OverlayPanel(content: NSHostingView(rootView: root))
         NotificationCenter.default.addObserver(
@@ -135,26 +131,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Open the new-project form over the sessions view. A fresh ViewModel each summon
-    /// so the form starts clean (drops any partial state from a previous open).
-    private func presentNewProject() {
-        newProjectModel = ProjectCreateViewModel()
-        shell.presentingNewProject = true
-    }
-
-    private func dismissNewProject() {
-        shell.presentingNewProject = false
-    }
-
-    /// All worktrees succeeded → drop the form, hide the panel, and drop the user into
-    /// a fresh chat at the project root so they can bootstrap PROJECT.md immediately.
-    private func afterProjectCreated(_ projectRoot: URL) {
-        shell.presentingNewProject = false
-        hide()
-        model.reloadInBackground()        // surface the new project in the sessions list
-        TerminalDispatcher.newChat(cwd: projectRoot.path)
-    }
-
     private func killSelected() {
         guard let s = model.selectedSession, let pid = s.pid else { return }
         TerminalDispatcher.closePane(pid: pid)
@@ -244,21 +220,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handle(_ event: NSEvent) -> Bool {
         let cmd = event.modifierFlags.contains(.command)
         let option = event.modifierFlags.contains(.option)
-        let shift = event.modifierFlags.contains(.shift)
-
-        // Form-up: only intercept Esc (dismiss form) plus the standard edit shortcuts —
-        // those need to be re-dispatched through the responder chain because an
-        // LSUIElement app with no main menu won't auto-route them to the field editor.
-        if shell.presentingNewProject {
-            if Int(event.keyCode) == kVK_Escape {
-                dismissNewProject(); return true
-            }
-            if cmd, let sel = standardEditSelector(keyCode: Int(event.keyCode), shift: shift) {
-                NSApp.sendAction(sel, to: nil, from: nil)
-                return true
-            }
-            return false
-        }
 
         // View switching: ⌘1 = sessions, ⌘2 = tasks. Global to both views.
         if cmd {
@@ -322,20 +283,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         default: break
         }
         return appendIfPrintable(event, cmd: cmd, to: { [weak self] in self?.tasksModel.appendQuery($0) })
-    }
-
-    /// Walk the responder chain for the standard edit verbs. Returning a selector means
-    /// "this is ⌘<key> for selectAll / copy / paste / cut / undo / redo"; nil means we
-    /// don't recognize the chord.
-    private func standardEditSelector(keyCode: Int, shift: Bool) -> Selector? {
-        switch keyCode {
-        case kVK_ANSI_A: return #selector(NSText.selectAll(_:))
-        case kVK_ANSI_C: return #selector(NSText.copy(_:))
-        case kVK_ANSI_V: return #selector(NSText.paste(_:))
-        case kVK_ANSI_X: return #selector(NSText.cut(_:))
-        case kVK_ANSI_Z: return shift ? Selector(("redo:")) : Selector(("undo:"))
-        default: return nil
-        }
     }
 
     /// Typeahead: a printable character (no ⌘) extends the active view's filter query.
