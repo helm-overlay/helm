@@ -69,9 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tasksModel.reloadInBackground()
         startReaping()
 
-        // First-run prompt to symlink the bundled `project` CLI onto $PATH.
-        // Self-skipping if already installed, declined, or running unbundled.
-        DispatchQueue.main.async { CLIInstaller.promptOnFirstLaunchIfNeeded() }
+        // Helm no longer prompts to install the bundled project CLI on first launch.
     }
 
     private func startReaping() {
@@ -163,6 +161,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.kill(sessionId: s.sessionId, pid: pid)
     }
 
+    private func addWorkspaceFolders() {
+        DispatchQueue.main.async { [weak self] in
+            self?.presentWorkspaceFolderPicker()
+        }
+    }
+
+    private func presentWorkspaceFolderPicker() {
+        let shouldRestorePanel = panel.isVisible
+        if shouldRestorePanel { hide() }
+
+        let picker = NSOpenPanel()
+        picker.canChooseFiles = false
+        picker.canChooseDirectories = true
+        picker.allowsMultipleSelection = true
+        picker.canCreateDirectories = false
+        picker.prompt = "Add"
+        picker.message = "Choose project folders to show in Helm."
+
+        NSApp.activate(ignoringOtherApps: true)
+        let response = picker.runModal()
+        if response == .OK {
+            do {
+                _ = try HelmConfig.addWorkspaceFolders(picker.urls.map(\.path))
+                model.reloadInBackground()
+            } catch {
+                NSLog("Helm: failed to save workspace folders: \(error)")
+                NSSound.beep()
+            }
+        }
+
+        if shouldRestorePanel { show() }
+    }
+
     /// Open a task's markdown file in the user's editor. Defaults to `zed`; the
     /// `taskEditor` config field picks something else (`code`, `cursor`, `open` for the
     /// macOS default). The vault path is hardcoded; matches the widget.
@@ -234,14 +265,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             switch Int(event.keyCode) {
             case kVK_ANSI_1: shell.view = .sessions; return true
             case kVK_ANSI_2: shell.view = .tasks;    return true
+            case kVK_ANSI_O: addWorkspaceFolders();  return true
             default: break
             }
         }
-        // ⌘⇧N = open new-project form (any view).
-        if cmd && shift && Int(event.keyCode) == kVK_ANSI_N {
-            presentNewProject(); return true
-        }
-
         switch shell.view {
         case .sessions: return handleSessions(event, cmd: cmd, option: option)
         case .tasks:    return handleTasks(event, cmd: cmd, option: option)
@@ -261,9 +288,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case kVK_UpArrow:     model.clearSelection(); model.move(by: -1); return true
         case kVK_ANSI_A where cmd: model.selectAllQuery();  return true
         case kVK_Delete:
-            if cmd        { model.clearQuery() }
-            else if option { model.deleteWordBack() }
-            else           { model.backspaceQuery() }
+            if cmd {
+                if model.query.isEmpty {
+                    if !model.removeSelectedWorkspaceFolder() { NSSound.beep() }
+                } else {
+                    model.clearQuery()
+                }
+            } else if option { model.deleteWordBack() }
+            else             { model.backspaceQuery() }
             return true
         case kVK_ANSI_N where cmd: newChat();               return true
         case kVK_ANSI_X where cmd: killSelected();          return true

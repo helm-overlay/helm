@@ -7,11 +7,29 @@ final class SessionStoreTests: XCTestCase {
     // MARK: grouping
 
     func testProjectFromCwd() {
-        XCTAssertEqual(SessionStore.project(forCwd: "/Users/me/projects/helm/app", home: home), "helm")
-        XCTAssertEqual(SessionStore.project(forCwd: "/Users/me/projects/helm", home: home), "helm")
+        XCTAssertEqual(SessionStore.project(forCwd: "/Users/me/projects/helm/app", home: home), "Other")
+        XCTAssertEqual(SessionStore.project(forCwd: "/Users/me/projects/helm", home: home), "Other")
         XCTAssertEqual(SessionStore.project(forCwd: "/Users/me/worktrees/mobile/x", home: home), "Other")
         XCTAssertEqual(SessionStore.project(forCwd: "/Users/me/Desktop/local_dev", home: home), "Other")
         XCTAssertEqual(SessionStore.project(forCwd: "", home: home), "Other")
+    }
+
+    func testConfiguredWorkspaceFolderGroupsSessions() {
+        XCTAssertEqual(
+            SessionStore.project(
+                forCwd: "/Users/me/Home/dev/repos/helm/Sources",
+                home: home,
+                workspaceFolders: ["/Users/me/Home/dev/repos/helm"]),
+            "helm")
+    }
+
+    func testConfiguredWorkspaceCanLiveUnderProjects() {
+        XCTAssertEqual(
+            SessionStore.project(
+                forCwd: "/Users/me/projects/acme/helm",
+                home: home,
+                workspaceFolders: ["/Users/me/projects/acme/helm"]),
+            "helm")
     }
 
     func testSingularChatsOnlyForExactHome() {
@@ -143,7 +161,7 @@ final class SessionStoreTests: XCTestCase {
     // MARK: join
 
     func testMergeJoinsOnSessionId() {
-        let store = SessionStore(home: home)
+        let store = SessionStore(home: home, workspaceFolders: ["/Users/me/projects/helm"])
         let live = [LiveRecord(pid: 100, sessionId: "A", kind: "interactive", status: "busy", name: "live one")]
         let history = [
             HistoryRecord(sessionId: "A", cwd: "/Users/me/projects/helm", gitBranch: "main", aiTitle: "old title", lastActive: Date(timeIntervalSince1970: 10)),
@@ -164,7 +182,7 @@ final class SessionStoreTests: XCTestCase {
     }
 
     func testLabelFallbackChain() {
-        let store = SessionStore(home: home)
+        let store = SessionStore(home: home, workspaceFolders: ["/Users/me/projects/p"])
         let h = HistoryRecord(sessionId: "X", cwd: "/Users/me/projects/p/repo", gitBranch: nil, aiTitle: nil, lastActive: .distantPast)
         let merged = store.merge(live: [], history: [h])
         XCTAssertEqual(merged[0].label, "repo")      // last resort: cwd basename

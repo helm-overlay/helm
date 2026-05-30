@@ -36,7 +36,7 @@ public struct ChatSession: Identifiable, Equatable {
     public let agent: AgentKind
     public let transcriptPath: String?
     public let cwd: String
-    public let project: String       // grouping key (~/projects/<name>, else "Other")
+    public let project: String       // grouping key (configured workspace folder, else "Other")
     public let label: String
     public let branch: String?       // git branch, for search matching only
     public let state: SessionState

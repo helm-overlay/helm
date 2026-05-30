@@ -15,7 +15,8 @@ final class PiSessionBackendTests: XCTestCase {
         """.write(to: liveDir.appendingPathComponent("\(pid).json"), atomically: true, encoding: .utf8)
         try #"{"reason":"needs_input"}"#.write(to: stateDir.appendingPathComponent("pi-live.json"), atomically: true, encoding: .utf8)
 
-        let rows = SessionStore(home: home.path, enabledAgents: [.pi]).load()
+        let rows = SessionStore(home: home.path, enabledAgents: [.pi],
+                                workspaceFolders: ["/Users/me/projects/demo"]).load()
         XCTAssertEqual(rows.count, 1)
         XCTAssertEqual(rows[0].agent, .pi)
         XCTAssertEqual(rows[0].sessionId, "pi-live")
@@ -56,7 +57,8 @@ final class PiSessionBackendTests: XCTestCase {
             #"{"type":"session_info","name":"Named Pi Chat"}"#
         ].joined(separator: "\n").write(to: file, atomically: true, encoding: .utf8)
 
-        let rows = SessionStore(home: home.path, enabledAgents: [.pi]).load()
+        let rows = SessionStore(home: home.path, enabledAgents: [.pi],
+                                workspaceFolders: ["/Users/me/projects/demo"]).load()
         XCTAssertEqual(rows.count, 1)
         XCTAssertEqual(rows[0].agent, .pi)
         XCTAssertEqual(rows[0].sessionId, "same-id")

@@ -18,7 +18,6 @@ final class SessionListViewModel: ObservableObject {
     @Published private(set) var now: Date = Date()   // clock for age labels; ticks while visible
     @Published private(set) var focusedProject: String?   // drilled into one project; others hidden
 
-    private let store = SessionStore()
     private var all: [(project: String, sessions: [ChatSession])] = []
     private var ticker: Timer?
     private var liveTicker: Timer?
@@ -77,7 +76,7 @@ final class SessionListViewModel: ObservableObject {
     }
 
     private func applyLiveRefresh(_ rows: [ChatSession]) {
-        all = SessionStore.group(suppressKilled(rows), includeEmpty: store.listProjects())
+        all = SessionStore.group(suppressKilled(rows), includeEmpty: SessionStore().listProjects())
         applyFilter(animated: true)   // a row going live/dead slides to its new slot
     }
 
@@ -94,7 +93,7 @@ final class SessionListViewModel: ObservableObject {
     /// Synchronous reload (probe/tests).
     func reload() {
         hideOlderThan = HelmConfig.load().hideOlderThan
-        all = store.grouped()
+        all = SessionStore().grouped()
         applyFilter()
     }
 
@@ -113,8 +112,28 @@ final class SessionListViewModel: ObservableObject {
         isReloading = false
         hideOlderThan = HelmConfig.load().hideOlderThan   // pick up config edits on resummon
         all = SessionStore.group(suppressKilled(grouped.flatMap(\.sessions)),
-                                 includeEmpty: store.listProjects())
+                                 includeEmpty: SessionStore().listProjects())
         applyFilter(animated: true)   // sessions appearing/leaving slide rather than snap
+    }
+
+    var canRemoveSelectedWorkspaceFolder: Bool {
+        selectedWorkspaceFolderPath() != nil
+    }
+
+    @discardableResult
+    func removeSelectedWorkspaceFolder() -> Bool {
+        guard query.isEmpty, let path = selectedWorkspaceFolderPath() else { return false }
+        do {
+            _ = try HelmConfig.removeWorkspaceFolder(path)
+            if focusedProject == URL(fileURLWithPath: path).lastPathComponent {
+                focusedProject = nil
+            }
+            reloadInBackground()
+            return true
+        } catch {
+            NSLog("Helm: failed to remove workspace folder: \(error)")
+            return false
+        }
     }
 
     /// Kill a live session. Flip its row to dead now (optimistic), mark it as killing so no
@@ -267,7 +286,7 @@ final class SessionListViewModel: ObservableObject {
             if recent.isEmpty {
                 let cwd = isSingularChats
                     ? "\(NSHomeDirectory())/Home"
-                    : "\(NSHomeDirectory())/projects/\(group.project)"
+                    : workspaceFolderPath(for: group.project) ?? ""
                 return DisplayGroup(project: group.project,
                                     sessions: [.placeholder(forProject: group.project, cwd: cwd)],
                                     hiddenCount: 0)
@@ -303,6 +322,19 @@ final class SessionListViewModel: ObservableObject {
         let flat = groups.flatMap(\.sessions)
         if selection == nil || !flat.contains(where: { $0.sessionId == selection }) {
             selection = flat.first?.sessionId
+        }
+    }
+
+    private func selectedWorkspaceFolderPath() -> String? {
+        let project = focusedProject
+            ?? groups.first(where: { group in group.sessions.contains { $0.sessionId == selection } })?.project
+        guard let project else { return nil }
+        return workspaceFolderPath(for: project)
+    }
+
+    private func workspaceFolderPath(for project: String) -> String? {
+        HelmConfig.load().workspaceFolders.first {
+            URL(fileURLWithPath: $0).lastPathComponent == project
         }
     }
 }

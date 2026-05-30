@@ -57,17 +57,21 @@ public struct HelmConfig: Equatable {
     public var taskEditor: TaskEditor
     public var enabledAgents: [AgentKind]
     public var defaultAgent: AgentKind
+    /// User-picked folders that should appear as first-class session groups.
+    public var workspaceFolders: [String]
 
     public init(terminal: TerminalKind = .default, hideOlderThanDays: Int = 1,
                 taskEditor: TaskEditor = .default,
                 enabledAgents: [AgentKind] = [.claude],
-                defaultAgent: AgentKind = .claude) {
+                defaultAgent: AgentKind = .claude,
+                workspaceFolders: [String] = []) {
         let uniqueEnabled = Self.normalizedAgents(enabledAgents)
         self.terminal = terminal
         self.hideOlderThanDays = hideOlderThanDays
         self.taskEditor = taskEditor
         self.enabledAgents = uniqueEnabled
         self.defaultAgent = uniqueEnabled.contains(defaultAgent) ? defaultAgent : uniqueEnabled[0]
+        self.workspaceFolders = Self.normalizedPaths(workspaceFolders)
     }
 
     /// Cutoff as a duration; 0 if disabled.
@@ -89,7 +93,49 @@ public struct HelmConfig: Equatable {
             hideOlderThanDays: (obj["hideOlderThanDays"] as? Int) ?? HelmConfig().hideOlderThanDays,
             taskEditor: TaskEditor(parsing: obj["taskEditor"]),
             enabledAgents: parseAgents(obj["enabledAgents"]),
-            defaultAgent: parseAgent(obj["defaultAgent"]) ?? .claude)
+            defaultAgent: parseAgent(obj["defaultAgent"]) ?? .claude,
+            workspaceFolders: parseWorkspaceFolders(obj["workspaceFolders"]))
+    }
+
+    public static func addWorkspaceFolders(_ paths: [String], to url: URL = path) throws -> HelmConfig {
+        let existingObject: [String: Any]
+        if let data = try? Data(contentsOf: url),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            existingObject = obj
+        } else {
+            existingObject = [:]
+        }
+
+        var updated = existingObject
+        let current = parseWorkspaceFolders(existingObject["workspaceFolders"])
+        updated["workspaceFolders"] = normalizedPaths(current + paths)
+
+        let dir = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let data = try JSONSerialization.data(withJSONObject: updated, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: url, options: .atomic)
+        return load(from: url)
+    }
+
+    public static func removeWorkspaceFolder(_ folderPath: String, from url: URL = path) throws -> HelmConfig {
+        let existingObject: [String: Any]
+        if let data = try? Data(contentsOf: url),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            existingObject = obj
+        } else {
+            existingObject = [:]
+        }
+
+        let normalized = normalizedPaths([folderPath]).first
+        var updated = existingObject
+        let remaining = parseWorkspaceFolders(existingObject["workspaceFolders"]).filter { $0 != normalized }
+        updated["workspaceFolders"] = remaining
+
+        let dir = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let data = try JSONSerialization.data(withJSONObject: updated, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: url, options: .atomic)
+        return load(from: url)
     }
 
     private static func parseAgent(_ raw: Any?) -> AgentKind? {
@@ -102,9 +148,24 @@ public struct HelmConfig: Equatable {
         return normalizedAgents(values.compactMap { AgentKind(rawValue: $0.lowercased()) })
     }
 
+    private static func parseWorkspaceFolders(_ raw: Any?) -> [String] {
+        guard let values = raw as? [String] else { return [] }
+        return normalizedPaths(values)
+    }
+
     private static func normalizedAgents(_ agents: [AgentKind]) -> [AgentKind] {
         var seen = Set<AgentKind>()
         let unique = agents.filter { seen.insert($0).inserted }
         return unique.isEmpty ? [.claude] : unique
+    }
+
+    private static func normalizedPaths(_ paths: [String]) -> [String] {
+        var seen = Set<String>()
+        return paths.compactMap { raw in
+            let expanded = (raw as NSString).expandingTildeInPath
+            let standardized = URL(fileURLWithPath: expanded).standardizedFileURL.path
+            guard !standardized.isEmpty, seen.insert(standardized).inserted else { return nil }
+            return standardized
+        }
     }
 }

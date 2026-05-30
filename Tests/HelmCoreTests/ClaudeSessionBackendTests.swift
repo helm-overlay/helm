@@ -35,7 +35,7 @@ final class ClaudeSessionBackendTests: XCTestCase {
         try (#"{"cwd":"\#(demo)","entrypoint":"sdk-py"}"# + "\n")
             .write(to: projects.appendingPathComponent("S3.jsonl"), atomically: true, encoding: .utf8)
 
-        let store = SessionStore(home: home.path)
+        let store = SessionStore(home: home.path, workspaceFolders: [demo])
         XCTAssertEqual(store.readLive().map(\.sessionId), ["S1"])
         XCTAssertEqual(store.readLive().first?.status, "busy")
 

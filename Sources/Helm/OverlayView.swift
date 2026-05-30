@@ -101,10 +101,14 @@ struct OverlayView: View {
             hint("↵", "open")
             if model.focusedProject == nil {
                 hint("⌘↓", "focus project")
+                hint("⌘O", "add folder")
                 hint("⌘N", "new chat")
                 hint("⌘X", "kill")
                 hint("esc", "dismiss")
             } else {
+                if model.canRemoveSelectedWorkspaceFolder {
+                    hint("⌘⌫", "remove folder")
+                }
                 hint("⌘N", "new chat")
                 hint("⌘X", "kill")
                 hint("esc", "back")
@@ -129,7 +133,7 @@ struct OverlayView: View {
 private struct GroupHeader: View {
     let project: String
     var body: some View {
-        Text(project == "Other" ? "OTHER · LEGACY" : project.uppercased())
+        Text(project.uppercased())
             .font(.system(size: 10, weight: .bold)).foregroundStyle(.tertiary)
             .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 2)
             .frame(maxWidth: .infinity, alignment: .leading)

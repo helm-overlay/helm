@@ -7,20 +7,24 @@ import Darwin
 ///
 /// Live    : ~/.claude/sessions/<pid>.json  (running only; pid/status/kind/name)
 /// History : ~/.claude/projects/*/<sessionId>.jsonl  (every session; filename == sessionId)
-/// Join key: sessionId.  Grouping: cwd under ~/projects/<name> → <name>; cwd == ~/Home
-/// → "Singular Chats" (one-off launchpad, live rows only in default view); else "Other".
+/// Join key: sessionId.  Grouping: cwd under a configured workspace folder → that
+/// folder's name; cwd == ~/Home → "Singular Chats" (one-off launchpad, live rows only
+/// in default view); else "Other".
 public struct SessionStore {
     public let home: String
     public let enabledAgents: [AgentKind]
+    public let workspaceFolders: [String]
     private let backends: [any SessionBackend]
 
     /// Group name for one-off sessions launched directly in ~/Home. Not a project —
     /// dead rows are hidden from the default view (search still finds them).
     public static let singularChatsGroup = "Singular Chats"
 
-    public init(home: String = NSHomeDirectory(), enabledAgents: [AgentKind] = HelmConfig.load().enabledAgents) {
+    public init(home: String = NSHomeDirectory(), enabledAgents: [AgentKind] = HelmConfig.load().enabledAgents,
+                workspaceFolders: [String] = HelmConfig.load().workspaceFolders) {
         self.home = home
         self.enabledAgents = enabledAgents
+        self.workspaceFolders = workspaceFolders
         self.backends = enabledAgents.map { agent in
             switch agent {
             case .claude: return ClaudeSessionBackend(home: home)
@@ -43,9 +47,8 @@ public struct SessionStore {
     }
 
     /// Grouped + sorted for display: projects alphabetical, "Other" last; within a
-    /// group live rows first, then newest-first by lastActive. Includes every project
-    /// dir under `~/projects/` even if it has no sessions yet, so a freshly-created
-    /// project shows up in the overlay before its first chat.
+    /// group live rows first, then newest-first by lastActive. Includes configured
+    /// workspace folders even if they have no sessions yet.
     public func grouped() -> [(project: String, sessions: [ChatSession])] {
         Self.group(load(), includeEmpty: listProjects() + [Self.singularChatsGroup])
     }
@@ -65,16 +68,12 @@ public struct SessionStore {
     // MARK: Pure logic (unit-tested without the filesystem)
 
     /// Map a working directory to its display group.
-    public static func project(forCwd cwd: String, home: String) -> String {
+    public static func project(forCwd cwd: String, home: String, workspaceFolders: [String] = []) -> String {
         if cwd == home + "/Home" { return singularChatsGroup }
-        let prefix = home + "/projects/"
-        if cwd.hasPrefix(prefix) {
-            let rest = String(cwd.dropFirst(prefix.count))
-            return rest.split(separator: "/", maxSplits: 1).first.map(String.init) ?? "Other"
+        if let workspace = matchingWorkspace(forCwd: cwd, workspaceFolders: workspaceFolders) {
+            return workspace
         }
-        guard let range = cwd.range(of: "/projects/") else { return "Other" }
-        let rest = String(cwd[range.upperBound...])
-        return rest.split(separator: "/", maxSplits: 1).first.map(String.init) ?? "Other"
+        return "Other"
     }
 
     /// Join history (left) with live on sessionId. Live-only sessions are still included.
@@ -92,7 +91,7 @@ public struct SessionStore {
                 ?? h.sessionId
             out.append(ChatSession(
                 sessionId: h.sessionId, cwd: h.cwd ?? "",
-                project: Self.project(forCwd: h.cwd ?? "", home: home),
+                project: Self.project(forCwd: h.cwd ?? "", home: home, workspaceFolders: workspaceFolders),
                 label: label, state: state, kind: l?.kind, pid: l?.pid,
                 lastActive: h.lastActive, branch: h.gitBranch,
                 agent: h.agent, transcriptPath: h.transcriptPath))
@@ -306,25 +305,19 @@ public struct SessionStore {
             .map { ($0, sortRows(byProject[$0]!)) }
     }
 
-    /// Non-hidden dirs under `~/projects/` that contain a `PROJECT.md` — i.e. real
-    /// projects, even if they have no sessions yet. Cheap (one readdir + per-entry
-    /// stat); safe to call on every live-refresh tick.
+    /// Configured workspace folders, even if they have no sessions yet.
     public func listProjects() -> [String] {
-        let dir = URL(fileURLWithPath: home).appendingPathComponent("projects")
-        let entries = (try? FileManager.default.contentsOfDirectory(at: dir,
-            includingPropertiesForKeys: [.isDirectoryKey])) ?? []
-        var out: [String] = []
-        for entry in entries {
-            let name = entry.lastPathComponent
-            if name.hasPrefix(".") { continue }
-            var isDir: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: entry.path, isDirectory: &isDir),
-                  isDir.boolValue,
-                  FileManager.default.fileExists(atPath: entry.appendingPathComponent("PROJECT.md").path)
-            else { continue }
-            out.append(name)
+        workspaceFolders.map { URL(fileURLWithPath: $0).lastPathComponent }
+    }
+
+    private static func matchingWorkspace(forCwd cwd: String, workspaceFolders: [String]) -> String? {
+        let normalizedCwd = URL(fileURLWithPath: cwd).standardizedFileURL.path
+        let matches = workspaceFolders
+            .map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath).standardizedFileURL.path }
+            .filter { root in normalizedCwd == root || normalizedCwd.hasPrefix(root + "/") }
+        return matches.max(by: { $0.count < $1.count }).map {
+            URL(fileURLWithPath: $0).lastPathComponent
         }
-        return out
     }
 
     // MARK: Backend dispatch + shared filesystem helpers
@@ -407,4 +400,3 @@ public struct SessionStore {
         SessionIO.collectSmallLines(reading: read)
     }
 }
-

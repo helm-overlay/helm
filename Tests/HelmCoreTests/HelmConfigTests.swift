@@ -72,4 +72,40 @@ final class HelmConfigTests: XCTestCase {
         XCTAssertEqual(cfg.enabledAgents, [.claude])
         XCTAssertEqual(cfg.defaultAgent, .claude)
     }
+
+    func testLoadReadsWorkspaceFolders() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("helm-cfg-\(UUID()).json")
+        try #"{"workspaceFolders":["~/Home/dev/helm","/tmp/demo","/tmp/demo"]}"#.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let cfg = HelmConfig.load(from: url)
+        XCTAssertEqual(cfg.workspaceFolders, [
+            "\(NSHomeDirectory())/Home/dev/helm",
+            "/tmp/demo",
+        ])
+    }
+
+    func testAddWorkspaceFoldersPreservesExistingConfig() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("helm-cfg-\(UUID()).json")
+        try #"{"terminal":"iterm","workspaceFolders":["/tmp/one"]}"#.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let cfg = try HelmConfig.addWorkspaceFolders(["/tmp/two", "/tmp/one"], to: url)
+
+        XCTAssertEqual(cfg.terminal, .iterm)
+        XCTAssertEqual(cfg.workspaceFolders, ["/tmp/one", "/tmp/two"])
+    }
+
+    func testRemoveWorkspaceFolderPreservesExistingConfig() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("helm-cfg-\(UUID()).json")
+        try #"{"terminal":"iterm","workspaceFolders":["/tmp/one","/tmp/two"]}"#.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let cfg = try HelmConfig.removeWorkspaceFolder("/tmp/one", from: url)
+
+        XCTAssertEqual(cfg.terminal, .iterm)
+        XCTAssertEqual(cfg.workspaceFolders, ["/tmp/two"])
+    }
 }
