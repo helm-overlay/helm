@@ -109,6 +109,61 @@ final class HelmConfigTests: XCTestCase {
         XCTAssertEqual(cfg.workspaceFolders, ["/tmp/two"])
     }
 
+    func testRemoveWorkspaceFolderExcludesRootTrackedChild() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("helm-cfg-\(UUID()).json")
+        try #"{"workspaceRoots":["/root"]}"#.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let lister: (String) -> [String] = { $0 == "/root" ? ["/root/a", "/root/b"] : [] }
+        // "/root/a" is auto-tracked via the root, not an explicit folder — removing it must
+        // record an exclusion so the root can't re-add it.
+        let cfg = try HelmConfig.removeWorkspaceFolder("/root/a", from: url, lister: lister)
+
+        XCTAssertEqual(cfg.excludedFolders, ["/root/a"])
+        XCTAssertEqual(cfg.resolvedWorkspaceFolders(lister: lister), ["/root/b"])
+    }
+
+    func testRemoveExplicitFolderLeavesNoExclusionCruft() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("helm-cfg-\(UUID()).json")
+        try #"{"workspaceFolders":["/ws/one","/ws/two"]}"#.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // No root would re-add "/ws/one", so removing it should not leave a dangling exclusion.
+        let cfg = try HelmConfig.removeWorkspaceFolder("/ws/one", from: url, lister: { _ in [] })
+
+        XCTAssertEqual(cfg.workspaceFolders, ["/ws/two"])
+        XCTAssertEqual(cfg.excludedFolders, [])
+    }
+
+    func testStaleExclusionPrunedWhenRootStopsDiscovering() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("helm-cfg-\(UUID()).json")
+        try #"{"workspaceRoots":["/root"],"excludedFolders":["/root/gone"]}"#
+            .write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // "/root/gone" no longer exists under the root — the next write self-prunes it.
+        let cfg = try HelmConfig.addWorkspaceRoots(["/root2"], to: url, lister: { _ in [] })
+
+        XCTAssertEqual(cfg.excludedFolders, [])
+    }
+
+    func testAddWorkspaceFolderClearsPriorExclusion() throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("helm-cfg-\(UUID()).json")
+        try #"{"workspaceRoots":["/root"],"excludedFolders":["/root/a"]}"#
+            .write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let lister: (String) -> [String] = { $0 == "/root" ? ["/root/a"] : [] }
+        let cfg = try HelmConfig.addWorkspaceFolders(["/root/a"], to: url, lister: lister)
+
+        XCTAssertEqual(cfg.excludedFolders, [])
+        XCTAssertEqual(cfg.resolvedWorkspaceFolders(lister: lister), ["/root/a"])
+    }
+
     func testLoadReadsWorkspaceRoots() throws {
         let url = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("helm-cfg-\(UUID()).json")

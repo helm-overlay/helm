@@ -110,6 +110,9 @@ struct OverlayView: View {
             if model.focusedProject == nil {
                 hint("⌘↓", "focus project")
                 hint("⌘O", "add folder")
+                if model.canRemoveSelectedWorkspaceFolder {
+                    hint("⌘⌫", "remove folder")
+                }
                 hint("⌘N", "new chat")
                 hint("⌘X", "kill")
                 hint("esc", "dismiss")
