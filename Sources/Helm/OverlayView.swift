@@ -11,11 +11,20 @@ struct OverlayView: View {
     /// Renders content only; the panel chrome (material, border, rounded corner) is
     /// owned by `RootView` so view switches crossfade the content without doubling
     /// the material layer.
+    private let masterWidth: CGFloat = 220
+    private let railCap = 6     // most live rows shown in the rail before a "+N more" note
+
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider().opacity(0.5)
-            list
+            if model.isSearching {
+                searchResults
+            } else {
+                railSection
+                Divider().opacity(0.5)
+                masterDetail
+            }
             Divider().opacity(0.5)
             footer
         }
@@ -53,52 +62,142 @@ struct OverlayView: View {
         .padding(.horizontal, 16).padding(.vertical, 12)
     }
 
-    // MARK: List
+    // MARK: LIVE rail (pinned, cross-project)
 
-    private var list: some View {
+    private var railSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionLabel("LIVE")
+            if model.liveRail.isEmpty {
+                Text("Nothing running")
+                    .font(.system(size: 12)).foregroundStyle(.tertiary)
+                    .padding(.horizontal, 16).padding(.bottom, 8)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(model.liveRail.prefix(railCap)) { s in
+                        row(s, showsProject: true,
+                            selected: model.zone == .live && s.id == model.liveSelection)
+                    }
+                    if model.liveRail.count > railCap {
+                        Text("+\(model.liveRail.count - railCap) more live")
+                            .font(.system(size: 11, weight: .medium)).foregroundStyle(.tertiary)
+                            .padding(.horizontal, 20).padding(.vertical, 3)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+    }
+
+    // MARK: Master (projects) + detail (selected project's cold history)
+
+    private var masterDetail: some View {
+        HStack(spacing: 0) {
+            projectsMaster.frame(width: masterWidth)
+            Divider().opacity(0.5)
+            detailPane.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    private var projectsMaster: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionLabel("PROJECTS")
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(model.projectSummaries) { p in
+                        ProjectMasterRow(summary: p,
+                                         active: p.project == model.selectedProject,
+                                         focused: p.project == model.selectedProject && model.zone == .projects)
+                            .contentShape(Rectangle())
+                            .onTapGesture { model.selectProject(p.project) }
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private var detailPane: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionLabel(detailTitle)
+            if model.detailRows.isEmpty {
+                Text("No cold sessions — live shown above")
+                    .font(.system(size: 12)).foregroundStyle(.tertiary)
+                    .padding(.horizontal, 16).padding(.top, 4)
+                Spacer()
+            } else {
+                sessionScrollList(model.detailRows, showsProject: false,
+                                  selectedID: model.zone == .cold ? model.coldSelection : nil)
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private var detailTitle: String {
+        guard let p = model.selectedProject else { return "HISTORY" }
+        let cold = model.projectSummaries.first { $0.project == p }?.coldCount ?? 0
+        return "\(p.uppercased())  ·  \(cold) cold"
+    }
+
+    // MARK: Search (cross-project, full width)
+
+    private var searchResults: some View {
+        Group {
+            if model.detailRows.isEmpty {
+                VStack {
+                    Text("No matching sessions").foregroundStyle(.secondary)
+                        .padding(.horizontal, 16).padding(.vertical, 24)
+                    Spacer()
+                }
+            } else {
+                sessionScrollList(model.detailRows, showsProject: true, selectedID: model.coldSelection)
+            }
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    // MARK: Row plumbing
+
+    private func sessionScrollList(_ rows: [ChatSession], showsProject: Bool, selectedID: String?) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(model.groups) { group in
-                        Section {
-                            ForEach(group.sessions) { session in
-                                SessionRow(session: session,
-                                           selected: session.id == model.selection,
-                                           now: model.now,
-                                           suppressAnimations: model.suppressAnimations)
-                                    .id(session.id)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { onPick(session) }
-                                    .transition(.rowEnterLeave)
-                            }
-                            if group.hiddenCount > 0 {
-                                CollapseTail(label: "+\(group.hiddenCount) older")
-                                    .onTapGesture { model.toggleFocus(group.project) }
-                                    .transition(.rowEnterLeave)
-                            }
-                        } header: {
-                            GroupHeader(project: group.project)
-                        }
-                    }
-                    if model.groups.isEmpty {
-                        Text("No matching sessions")
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 16).padding(.vertical, 24)
+                    ForEach(rows) { s in
+                        row(s, showsProject: showsProject, selected: s.id == selectedID)
                     }
                 }
-                .padding(.vertical, 6)
+                .padding(.vertical, 4)
             }
-            .onChange(of: model.selection) { _, sel in
-                if let sel {
-                    if model.suppressAnimations {
-                        var t = Transaction(); t.disablesAnimations = true
-                        withTransaction(t) { proxy.scrollTo(sel, anchor: .center) }
-                    } else {
-                        withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(sel, anchor: .center) }
-                    }
+            .onChange(of: model.coldSelection) { _, sel in
+                guard let sel else { return }
+                if model.suppressAnimations {
+                    var t = Transaction(); t.disablesAnimations = true
+                    withTransaction(t) { proxy.scrollTo(sel, anchor: .center) }
+                } else {
+                    withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(sel, anchor: .center) }
                 }
             }
         }
+    }
+
+    private func row(_ session: ChatSession, showsProject: Bool, selected: Bool) -> some View {
+        SessionRow(session: session,
+                   selected: selected,
+                   now: model.now,
+                   showsProject: showsProject,
+                   suppressAnimations: model.suppressAnimations)
+            .id(session.id)
+            .contentShape(Rectangle())
+            .onTapGesture { onPick(session) }
+            .transition(.rowEnterLeave)
+    }
+
+    private func sectionLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .bold)).foregroundStyle(.tertiary)
+            .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: Footer (hints)
@@ -106,24 +205,13 @@ struct OverlayView: View {
     private var footer: some View {
         HStack(spacing: 16) {
             hint("↑↓", "navigate")
+            if !model.isSearching { hint("←→", "project") }
             hint("↵", "open")
-            if model.focusedProject == nil {
-                hint("⌘↓", "focus project")
-                hint("⌘O", "add folder")
-                if model.canRemoveSelectedWorkspaceFolder {
-                    hint("⌘⌫", "remove folder")
-                }
-                hint("⌘N", "new chat")
-                hint("⌘X", "kill")
-                hint("esc", "dismiss")
-            } else {
-                if model.canRemoveSelectedWorkspaceFolder {
-                    hint("⌘⌫", "remove folder")
-                }
-                hint("⌘N", "new chat")
-                hint("⌘X", "kill")
-                hint("esc", "back")
-            }
+            hint("⌘O", "add folder")
+            hint("⌘N", "new chat")
+            hint("⌘X", "kill")
+            if model.canRemoveSelectedWorkspaceFolder { hint("⌘⌫", "remove folder") }
+            hint("esc", "dismiss")
             Spacer()
         }
         .font(.system(size: 11))
@@ -141,28 +229,43 @@ struct OverlayView: View {
     }
 }
 
-private struct GroupHeader: View {
-    let project: String
-    var body: some View {
-        Text(project.uppercased())
-            .font(.system(size: 10, weight: .bold)).foregroundStyle(.tertiary)
-            .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 2)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
+private struct ProjectMasterRow: View {
+    let summary: ProjectSummary
+    let active: Bool       // its history is the one shown in the detail pane
+    let focused: Bool      // the keyboard is currently in the PROJECTS zone, on this row
 
-private struct CollapseTail: View {
-    let label: String
+    private static let emerald = Color(red: 0.204, green: 0.827, blue: 0.600)  // #34D399
+
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "ellipsis").font(.system(size: 10, weight: .bold))
-            Text(label).font(.system(size: 12, weight: .medium))
+        HStack(spacing: 8) {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(active ? Color.accentColor : .clear)
+            Text(summary.project).lineLimit(1)
+                .font(.system(size: 13, weight: active ? .semibold : .regular))
+                .foregroundStyle(.primary)
+            Spacer(minLength: 6)
+            if summary.liveCount > 0 {
+                HStack(spacing: 3) {
+                    Circle().fill(Self.emerald).frame(width: 5, height: 5)
+                    Text("\(summary.liveCount)").font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Self.emerald)
+                }
+            }
+            Text("\(summary.coldCount)")
+                .font(.system(size: 11)).foregroundStyle(.tertiary)
+                .frame(minWidth: 16, alignment: .trailing)
         }
-        .foregroundStyle(.tertiary)
-        .padding(.horizontal, 12).padding(.vertical, 5)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .frame(maxWidth: .infinity)
+        .background(background, in: RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal, 8)
+    }
+
+    private var background: Color {
+        if focused { return Color.white.opacity(0.12) }   // keyboard is here
+        if active  { return Color.white.opacity(0.05) }   // its history is on the right
+        return .clear
     }
 }
 
@@ -170,6 +273,7 @@ private struct SessionRow: View {
     let session: ChatSession
     let selected: Bool
     let now: Date
+    var showsProject: Bool = false
     let suppressAnimations: Bool
 
     var body: some View {
@@ -184,6 +288,11 @@ private struct SessionRow: View {
                     .frame(width: 14, height: 14)
             }
             HStack(spacing: 10) {
+                if showsProject {
+                    Text(session.project).lineLimit(1)
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .frame(width: 78, alignment: .leading)
+                }
                 Text(session.label).lineLimit(1)
                     .font(.system(size: 14))
                     .foregroundStyle(session.isPlaceholder ? .tertiary : .primary)
