@@ -336,7 +336,7 @@ final class SessionListViewModel: ObservableObject {
     }
 
     private func workspaceFolderPath(for project: String) -> String? {
-        HelmConfig.load().workspaceFolders.first {
+        HelmConfig.load().resolvedWorkspaceFolders().first {
             URL(fileURLWithPath: $0).lastPathComponent == project
         }
     }

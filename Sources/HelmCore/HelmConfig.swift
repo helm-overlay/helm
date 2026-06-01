@@ -59,12 +59,17 @@ public struct HelmConfig: Equatable {
     public var defaultAgent: AgentKind
     /// User-picked folders that should appear as first-class session groups.
     public var workspaceFolders: [String]
+    /// Parent folders whose immediate child directories are each auto-tracked as a
+    /// workspace (e.g. `~/projects` → every project under it). Saves adding each one by
+    /// hand. Merged with `workspaceFolders` by `resolvedWorkspaceFolders()`.
+    public var workspaceRoots: [String]
 
     public init(terminal: TerminalKind = .default, hideOlderThanDays: Int = 1,
                 taskEditor: TaskEditor = .default,
                 enabledAgents: [AgentKind] = [.claude],
                 defaultAgent: AgentKind = .claude,
-                workspaceFolders: [String] = []) {
+                workspaceFolders: [String] = [],
+                workspaceRoots: [String] = []) {
         let uniqueEnabled = Self.normalizedAgents(enabledAgents)
         self.terminal = terminal
         self.hideOlderThanDays = hideOlderThanDays
@@ -72,6 +77,32 @@ public struct HelmConfig: Equatable {
         self.enabledAgents = uniqueEnabled
         self.defaultAgent = uniqueEnabled.contains(defaultAgent) ? defaultAgent : uniqueEnabled[0]
         self.workspaceFolders = Self.normalizedPaths(workspaceFolders)
+        self.workspaceRoots = Self.normalizedPaths(workspaceRoots)
+    }
+
+    /// Every tracked folder: the explicit `workspaceFolders` plus the immediate child
+    /// directories of each `workspaceRoots` entry, deduped. This is the set the session
+    /// store groups against. `lister` is injected so the directory scan can be faked in
+    /// tests; the default reads the real filesystem (hidden entries skipped, so a root's
+    /// `.template`-style dirs don't become workspaces).
+    public func resolvedWorkspaceFolders(
+        lister: (String) -> [String] = HelmConfig.childDirectories
+    ) -> [String] {
+        Self.normalizedPaths(workspaceFolders + workspaceRoots.flatMap(lister))
+    }
+
+    /// Immediate child directories of `root` (absolute paths), hidden entries skipped.
+    /// Missing/unreadable root → empty.
+    public static func childDirectories(of root: String) -> [String] {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(
+            at: URL(fileURLWithPath: root),
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles])
+        else { return [] }
+        return entries
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }
+            .map(\.path)
     }
 
     /// Cutoff as a duration; 0 if disabled.
@@ -94,46 +125,42 @@ public struct HelmConfig: Equatable {
             taskEditor: TaskEditor(parsing: obj["taskEditor"]),
             enabledAgents: parseAgents(obj["enabledAgents"]),
             defaultAgent: parseAgent(obj["defaultAgent"]) ?? .claude,
-            workspaceFolders: parseWorkspaceFolders(obj["workspaceFolders"]))
+            workspaceFolders: parseWorkspaceFolders(obj["workspaceFolders"]),
+            workspaceRoots: parseWorkspaceFolders(obj["workspaceRoots"]))
     }
 
     public static func addWorkspaceFolders(_ paths: [String], to url: URL = path) throws -> HelmConfig {
-        let existingObject: [String: Any]
-        if let data = try? Data(contentsOf: url),
-           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            existingObject = obj
-        } else {
-            existingObject = [:]
-        }
-
-        var updated = existingObject
-        let current = parseWorkspaceFolders(existingObject["workspaceFolders"])
-        updated["workspaceFolders"] = normalizedPaths(current + paths)
-
-        let dir = url.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let data = try JSONSerialization.data(withJSONObject: updated, options: [.prettyPrinted, .sortedKeys])
-        try data.write(to: url, options: .atomic)
-        return load(from: url)
+        try mutatePaths(key: "workspaceFolders", in: url) { normalizedPaths($0 + paths) }
     }
 
     public static func removeWorkspaceFolder(_ folderPath: String, from url: URL = path) throws -> HelmConfig {
-        let existingObject: [String: Any]
+        let normalized = normalizedPaths([folderPath]).first
+        return try mutatePaths(key: "workspaceFolders", in: url) { $0.filter { $0 != normalized } }
+    }
+
+    public static func addWorkspaceRoots(_ paths: [String], to url: URL = path) throws -> HelmConfig {
+        try mutatePaths(key: "workspaceRoots", in: url) { normalizedPaths($0 + paths) }
+    }
+
+    public static func removeWorkspaceRoot(_ rootPath: String, from url: URL = path) throws -> HelmConfig {
+        let normalized = normalizedPaths([rootPath]).first
+        return try mutatePaths(key: "workspaceRoots", in: url) { $0.filter { $0 != normalized } }
+    }
+
+    /// Read the config object, replace the path array at `key` via `transform`, write back
+    /// (preserving every other field), and return the reloaded config.
+    private static func mutatePaths(key: String, in url: URL,
+                                    _ transform: ([String]) -> [String]) throws -> HelmConfig {
+        var object: [String: Any] = [:]
         if let data = try? Data(contentsOf: url),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            existingObject = obj
-        } else {
-            existingObject = [:]
+            object = obj
         }
-
-        let normalized = normalizedPaths([folderPath]).first
-        var updated = existingObject
-        let remaining = parseWorkspaceFolders(existingObject["workspaceFolders"]).filter { $0 != normalized }
-        updated["workspaceFolders"] = remaining
+        object[key] = transform(parseWorkspaceFolders(object[key]))
 
         let dir = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let data = try JSONSerialization.data(withJSONObject: updated, options: [.prettyPrinted, .sortedKeys])
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: url, options: .atomic)
         return load(from: url)
     }

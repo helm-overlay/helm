@@ -21,7 +21,7 @@ public struct SessionStore {
     public static let singularChatsGroup = "Singular Chats"
 
     public init(home: String = NSHomeDirectory(), enabledAgents: [AgentKind] = HelmConfig.load().enabledAgents,
-                workspaceFolders: [String] = HelmConfig.load().workspaceFolders) {
+                workspaceFolders: [String] = HelmConfig.load().resolvedWorkspaceFolders()) {
         self.home = home
         self.enabledAgents = enabledAgents
         self.workspaceFolders = workspaceFolders
