@@ -59,8 +59,7 @@ public struct SessionStore {
     /// registry holds a session we have no row for yet (started after the last full scan);
     /// the caller does one full reload to pull its history/label.
     public func refreshLiveState(_ rows: [ChatSession]) -> (rows: [ChatSession], newSessions: Bool) {
-        Self.reconcileLive(rows, live: readLive()) { sessionId in
-            guard let row = rows.first(where: { $0.sessionId == sessionId }) else { return nil }
+        Self.reconcileLive(rows, live: readLive()) { row in
             return backend(for: row.agent)?.idleReason(for: row)
         }
     }
@@ -115,7 +114,7 @@ public struct SessionStore {
     /// so this stays pure and testable). `newSessions` flags a registry entry with no
     /// matching row — the caller must full-reload to materialize it (needs cwd/label).
     public static func reconcileLive(_ rows: [ChatSession], live: [LiveRecord],
-                                     idleReason: (String) -> IdleReason?)
+                                     idleReason: (ChatSession) -> IdleReason?)
         -> (rows: [ChatSession], newSessions: Bool) {
         let liveById = Dictionary(live.map { ("\($0.agent.rawValue):\($0.sessionId)", $0) }, uniquingKeysWith: { a, _ in a })
         let known = Set(rows.map(\.id))
@@ -126,7 +125,7 @@ public struct SessionStore {
             return ChatSession(
                 sessionId: row.sessionId, cwd: row.cwd, project: row.project, label: row.label,
                 state: state, kind: l?.kind, pid: l?.pid, lastActive: row.lastActive,
-                branch: row.branch, idleReason: state == .liveIdle ? idleReason(row.sessionId) : nil,
+                branch: row.branch, idleReason: state == .liveIdle ? idleReason(row) : nil,
                 agent: row.agent, transcriptPath: row.transcriptPath)
         }
         return (updated, newSessions)
@@ -365,8 +364,11 @@ public struct SessionStore {
         stateDir(home: home).appendingPathComponent("\(sessionId).json")
     }
 
-    public static func clearState(_ sessionId: String, home: String = NSHomeDirectory()) {
-        try? FileManager.default.removeItem(at: stateFileURL(sessionId, home: home))
+    public static func clearState(agent: AgentKind, sessionId: String, home: String = NSHomeDirectory()) {
+        switch agent {
+        case .claude: ClaudeSessionBackend(home: home).clearState(sessionId: sessionId)
+        case .pi: PiSessionBackend(home: home).clearState(sessionId: sessionId)
+        }
     }
 
     public static func deadStateIds(stateFileIds: Set<String>, aliveIds: Set<String>) -> Set<String> {
@@ -378,12 +380,12 @@ public struct SessionStore {
         var reaped: [String] = []
         if let claude = backend(for: .claude), let alive = claude.aliveSessionIds() {
             let dead = Self.deadStateIds(stateFileIds: stateFileIds(in: Self.stateDir(home: home)), aliveIds: alive)
-            for id in dead { try? FileManager.default.removeItem(at: Self.stateFileURL(id, home: home)) }
+            for id in dead { claude.clearState(sessionId: id) }
             reaped.append(contentsOf: dead.map { "claude:\($0)" })
         }
         if let pi = backend(for: .pi), let alive = pi.aliveSessionIds() {
             let dead = Self.deadStateIds(stateFileIds: stateFileIds(in: PiSessionBackend.stateDir(home: home)), aliveIds: alive)
-            for id in dead { try? FileManager.default.removeItem(at: PiSessionBackend.stateFileURL(id, home: home)) }
+            for id in dead { pi.clearState(sessionId: id) }
             reaped.append(contentsOf: dead.map { "pi:\($0)" })
         }
         return reaped

@@ -211,7 +211,7 @@ public struct ProjectManager {
                 return .failure(.dirty(uncommitted: dirty))
             }
             let unpushed = runner.run("/usr/bin/env",
-                                      ["git", "log", "--branches", "--not", "--remotes", "--oneline"],
+                                      ["git", "log", "HEAD", "--not", "--remotes", "--oneline"],
                                       target.path)
             let lines = unpushed.stdout
                 .split(whereSeparator: \.isNewline)

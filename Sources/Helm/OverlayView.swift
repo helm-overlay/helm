@@ -63,9 +63,10 @@ struct OverlayView: View {
                         Section {
                             ForEach(group.sessions) { session in
                                 SessionRow(session: session,
-                                           selected: session.sessionId == model.selection,
-                                           now: model.now)
-                                    .id(session.sessionId)
+                                           selected: session.id == model.selection,
+                                           now: model.now,
+                                           suppressAnimations: model.suppressAnimations)
+                                    .id(session.id)
                                     .contentShape(Rectangle())
                                     .onTapGesture { onPick(session) }
                                     .transition(.rowEnterLeave)
@@ -88,7 +89,14 @@ struct OverlayView: View {
                 .padding(.vertical, 6)
             }
             .onChange(of: model.selection) { _, sel in
-                if let sel { withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(sel, anchor: .center) } }
+                if let sel {
+                    if model.suppressAnimations {
+                        var t = Transaction(); t.disablesAnimations = true
+                        withTransaction(t) { proxy.scrollTo(sel, anchor: .center) }
+                    } else {
+                        withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(sel, anchor: .center) }
+                    }
+                }
             }
         }
     }
@@ -159,6 +167,7 @@ private struct SessionRow: View {
     let session: ChatSession
     let selected: Bool
     let now: Date
+    let suppressAnimations: Bool
 
     var body: some View {
         HStack(spacing: 0) {
@@ -168,7 +177,7 @@ private struct SessionRow: View {
                     .foregroundStyle(.tertiary)
                     .frame(width: 14, height: 14)
             } else {
-                OrbitIndicator(state: session.state, needsInput: session.needsInput)
+                OrbitIndicator(state: session.state, needsInput: session.needsInput, suppressAnimations: suppressAnimations)
                     .frame(width: 14, height: 14)
             }
             HStack(spacing: 10) {
@@ -196,6 +205,9 @@ private struct SessionRow: View {
         .background(selected ? Color.white.opacity(0.09) : .clear,
                     in: RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal, 8)
+        .transaction { transaction in
+            if suppressAnimations { transaction.disablesAnimations = true }
+        }
     }
 }
 
@@ -216,6 +228,7 @@ private struct SessionRow: View {
 private struct OrbitIndicator: View {
     let state: SessionState
     var needsInput: Bool = false
+    var suppressAnimations: Bool = false
 
     private static let emerald = Color(red: 0.204, green: 0.827, blue: 0.600)  // #34D399
     private static let amber = Color(red: 0.984, green: 0.749, blue: 0.141)    // #FBBF24
@@ -246,7 +259,10 @@ private struct OrbitIndicator: View {
         }
         .frame(width: 14, height: 14)
         .onAppear(perform: configureForAppear)
-        .onChange(of: state) { old, new in transition(from: old, to: new) }
+        .onChange(of: state) { old, new in
+            if suppressAnimations { configureForAppear() }
+            else { transition(from: old, to: new) }
+        }
     }
 
     /// idle + waiting on the user. Drives the amber colorway and the pulse.
@@ -266,9 +282,9 @@ private struct OrbitIndicator: View {
             Circle().strokeBorder(ringColor, style: StrokeStyle(lineWidth: 1, dash: [1.5, 2]))
                 .opacity(dashed ? 1 : 0)
         }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: dashed)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: state)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: needsInput)
+        .animation((reduceMotion || suppressAnimations) ? nil : .easeInOut(duration: 0.3), value: dashed)
+        .animation((reduceMotion || suppressAnimations) ? nil : .easeInOut(duration: 0.3), value: state)
+        .animation((reduceMotion || suppressAnimations) ? nil : .easeInOut(duration: 0.3), value: needsInput)
     }
 
     private func point(forAngle a0: Double) -> CGPoint {
@@ -391,7 +407,7 @@ private struct OrbitIndicator: View {
     }
 
     private func run(_ animation: Animation, _ body: () -> Void) {
-        if reduceMotion {
+        if reduceMotion || suppressAnimations {
             var t = Transaction(); t.disablesAnimations = true
             withTransaction(t, body)
         } else {

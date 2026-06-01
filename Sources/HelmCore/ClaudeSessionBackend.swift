@@ -68,6 +68,10 @@ struct ClaudeSessionBackend: SessionBackend {
         return out
     }
 
+    func clearState(sessionId: String) {
+        try? FileManager.default.removeItem(at: SessionStore.stateFileURL(sessionId, home: home))
+    }
+
     private func readTranscript(_ url: URL, mtime: Date) -> HistoryRecord {
         let sid = url.deletingPathExtension().lastPathComponent
         var cwd: String?, gitBranch: String?, aiTitle: String?, entrypoint: String?

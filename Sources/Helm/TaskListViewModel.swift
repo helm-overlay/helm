@@ -81,11 +81,12 @@ final class TaskListViewModel: ObservableObject {
 
     private func ingest(_ r: (active: [VaultTask], archive: [VaultTask])) {
         isReloading = false
-        // Skip the published-property churn when the disk hasn't changed (avoids a
-        // SwiftUI redraw every 1s for nothing).
-        if r.active == raw.active && r.archive == raw.archive { return }
+        // Skip published-property churn when disk hasn't changed, unless transient UI
+        // state needs timer-based expiry (optimistic overrides / frozen order).
+        let diskUnchanged = r.active == raw.active && r.archive == raw.archive
         raw = r
-        recompute(animated: true)
+        if diskUnchanged && overrides.isEmpty && frozenOrder == nil { return }
+        recompute(animated: !diskUnchanged)
     }
 
     // MARK: Cycle (status flip)

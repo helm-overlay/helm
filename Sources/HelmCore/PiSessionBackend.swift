@@ -10,28 +10,21 @@ struct PiSessionBackend: SessionBackend {
         self.piDir = URL(fileURLWithPath: home).appendingPathComponent(".pi")
     }
 
-    private struct LiveJSON: Decodable {
-        let pid: Int32
+    private struct StateJSON: Decodable {
+        let pid: Int32?
         let sessionId: String
         let status: String?
+        let reason: String?
         let name: String?
         let entrypoint: String?
     }
 
     func readLive() -> [LiveRecord] {
-        let dir = piDir.appendingPathComponent("sessions")
-        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-        var out: [LiveRecord] = []
-        for f in files where f.pathExtension == "json" {
-            guard let data = try? Data(contentsOf: f),
-                  let j = try? JSONDecoder().decode(LiveJSON.self, from: data),
-                  SessionStore.isUserThread(entrypoint: j.entrypoint),
-                  SessionIO.isAlive(j.pid) else { continue }
-            out.append(LiveRecord(pid: j.pid, sessionId: j.sessionId,
-                                  kind: nil, status: j.status, name: j.name,
-                                  agent: .pi))
+        readAliveStateFiles().map { j in
+            LiveRecord(pid: j.pid!, sessionId: j.sessionId,
+                       kind: nil, status: j.status ?? (j.reason == "running" ? "busy" : "idle"), name: j.name,
+                       agent: .pi)
         }
-        return out
     }
 
     func idleReason(for session: ChatSession) -> IdleReason? {
@@ -40,16 +33,13 @@ struct PiSessionBackend: SessionBackend {
     }
 
     func aliveSessionIds() -> Set<String>? {
-        let dir = piDir.appendingPathComponent("sessions")
-        guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return nil }
-        var out: Set<String> = []
-        for f in files where f.pathExtension == "json" {
-            guard let data = try? Data(contentsOf: f),
-                  let j = try? JSONDecoder().decode(LiveJSON.self, from: data),
-                  SessionIO.isAlive(j.pid) else { continue }
-            out.insert(j.sessionId)
-        }
-        return out
+        let dir = liveDir
+        guard (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) != nil else { return nil }
+        return Set(readAliveStateFiles().map(\.sessionId))
+    }
+
+    func clearState(sessionId: String) {
+        try? FileManager.default.removeItem(at: Self.stateFileURL(sessionId, home: home))
     }
 
     func readHistory() -> [HistoryRecord] {
@@ -104,6 +94,23 @@ struct PiSessionBackend: SessionBackend {
         else { return nil }
         return SessionStore.idleReason(fromState: obj["reason"] as? String)
     }
+
+    private func readAliveStateFiles() -> [StateJSON] {
+        let dir = liveDir
+        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        var out: [StateJSON] = []
+        for f in files where f.pathExtension == "json" {
+            guard let data = try? Data(contentsOf: f),
+                  let j = try? JSONDecoder().decode(StateJSON.self, from: data),
+                  SessionStore.isUserThread(entrypoint: j.entrypoint),
+                  let pid = j.pid,
+                  SessionIO.isAlive(pid) else { continue }
+            out.append(j)
+        }
+        return out
+    }
+
+    private var liveDir: URL { piDir.appendingPathComponent("sessions") }
 
     static func stateDir(home: String) -> URL {
         URL(fileURLWithPath: home).appendingPathComponent(".helm/pi/state")

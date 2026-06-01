@@ -67,7 +67,7 @@ xcodebuild -project Helm.xcodeproj -scheme HelmProbe -configuration Debug \
   -derivedDataPath build build
 ./build/Build/Products/Debug/HelmProbe        # print the session tree
 
-xcodebuild -project Helm.xcodeproj -scheme HelmCoreTests \
+xcodebuild -project Helm.xcodeproj -scheme HelmCore \
   -destination 'platform=macOS' test          # run unit tests
 ```
 
@@ -86,7 +86,9 @@ wraps that:
 ```sh
 bin/dev cli       # rebuild ProjectCLI Debug + symlink ~/.local/bin/project at it
 bin/dev app       # rebuild full Helm.app Debug (CLI bundled in)
-bin/dev ship      # rebuild Release, copy to /Applications, symlink onto $PATH
+bin/dev ship      # generate project, rebuild Release, copy to /Applications, symlink onto $PATH
+bin/dev test      # generate project and run HelmCore unit tests
+bin/dev check     # generate project, run tests, and build Debug Helm.app
 bin/dev where     # which build is active on $PATH?  (alias for `project where`)
 ```
 

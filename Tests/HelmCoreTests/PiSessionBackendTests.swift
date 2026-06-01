@@ -25,6 +25,22 @@ final class PiSessionBackendTests: XCTestCase {
         XCTAssertEqual(rows[0].label, "Live Pi")
     }
 
+    func testClearStateUsesAgentSpecificStateDirectory() throws {
+        let home = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("helm-state-clear-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let claudeStateDir = home.appendingPathComponent(".helm/state")
+        let piStateDir = home.appendingPathComponent(".helm/pi/state")
+        try FileManager.default.createDirectory(at: claudeStateDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: piStateDir, withIntermediateDirectories: true)
+        try #"{"reason":"done"}"#.write(to: claudeStateDir.appendingPathComponent("same.json"), atomically: true, encoding: .utf8)
+        try #"{"reason":"done"}"#.write(to: piStateDir.appendingPathComponent("same.json"), atomically: true, encoding: .utf8)
+
+        SessionStore.clearState(agent: .pi, sessionId: "same", home: home.path)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: claudeStateDir.appendingPathComponent("same.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: piStateDir.appendingPathComponent("same.json").path))
+    }
+
     func testPiReapsDeadState() throws {
         let home = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("helm-pi-reap-\(UUID())")
         defer { try? FileManager.default.removeItem(at: home) }

@@ -14,9 +14,10 @@ final class SessionListViewModel: ObservableObject {
     @Published private(set) var query: String = ""
     @Published private(set) var querySelected: Bool = false   // ⌘A: whole query highlighted
     @Published private(set) var lastEdit: Date = Date()        // anchors the cursor blink phase
-    @Published var selection: String?          // sessionId
+    @Published var selection: String?          // ChatSession.id (agent-prefixed)
     @Published private(set) var now: Date = Date()   // clock for age labels; ticks while visible
     @Published private(set) var focusedProject: String?   // drilled into one project; others hidden
+    @Published private(set) var suppressAnimations = false // true while applying a baseline panel load
 
     private var all: [(project: String, sessions: [ChatSession])] = []
     private var ticker: Timer?
@@ -28,7 +29,7 @@ final class SessionListViewModel: ObservableObject {
     /// apply stale data.
     private var isReloading = false
 
-    /// Sessions we've killed but whose process may still be exiting. While a sessionId is
+    /// Sessions we've killed but whose process may still be exiting. While a full row ID is
     /// here, every reconcile forces its row to cold — otherwise the per-second live ticker
     /// reads the still-alive process back out of the registry and snaps the row to idle.
     private var killing: Set<String> = []
@@ -87,7 +88,7 @@ final class SessionListViewModel: ObservableObject {
     private var visibleFlat: [ChatSession] { groups.flatMap(\.sessions) }
 
     var selectedSession: ChatSession? {
-        visibleFlat.first { $0.sessionId == selection }
+        visibleFlat.first { $0.id == selection }
     }
 
     /// Synchronous reload (probe/tests).
@@ -99,21 +100,21 @@ final class SessionListViewModel: ObservableObject {
 
     /// Scan the filesystem off the main thread, then apply on main. Cached data stays
     /// visible until the fresh scan lands, so the panel never blocks on I/O.
-    func reloadInBackground() {
+    func reloadInBackground(animated: Bool = true) {
         guard !isReloading else { return }
         isReloading = true
         Task.detached(priority: .userInitiated) {
             let grouped = SessionStore().grouped()
-            await self.ingest(grouped)
+            await self.ingest(grouped, animated: animated)
         }
     }
 
-    private func ingest(_ grouped: [(project: String, sessions: [ChatSession])]) {
+    private func ingest(_ grouped: [(project: String, sessions: [ChatSession])], animated: Bool = true) {
         isReloading = false
         hideOlderThan = HelmConfig.load().hideOlderThan   // pick up config edits on resummon
         all = SessionStore.group(suppressKilled(grouped.flatMap(\.sessions)),
                                  includeEmpty: SessionStore().listProjects())
-        applyFilter(animated: true)   // sessions appearing/leaving slide rather than snap
+        applyFilter(animated: animated)   // sessions appearing/leaving slide rather than snap
     }
 
     var canRemoveSelectedWorkspaceFolder: Bool {
@@ -139,13 +140,13 @@ final class SessionListViewModel: ObservableObject {
     /// Kill a live session. Flip its row to dead now (optimistic), mark it as killing so no
     /// reconcile resurrects it, then SIGTERM→SIGKILL off the main thread; once the process
     /// is confirmed gone, drop the guard and reload — the registry now agrees it's dead.
-    func kill(sessionId: String, pid: Int32) {
-        killing.insert(sessionId)
-        SessionStore.clearState(sessionId)   // SessionEnd hook won't run on a killed proc
-        markDead(sessionId)
+    func kill(_ session: ChatSession, pid: Int32) {
+        killing.insert(session.id)
+        SessionStore.clearState(agent: session.agent, sessionId: session.sessionId)   // SessionEnd hook won't run on a killed proc
+        markDead(session.id)
         Task.detached(priority: .userInitiated) {
             SessionStore.terminateAndWait(pid)
-            await self.finishKill(sessionId)
+            await self.finishKill(session.id)
         }
     }
 
@@ -158,7 +159,7 @@ final class SessionListViewModel: ObservableObject {
     /// kept separate so the optimistic update and the process teardown stay decoupled.
     private func markDead(_ sessionId: String) {
         all = all.map { group in
-            (group.project, group.sessions.map { $0.sessionId == sessionId ? $0.markedDead() : $0 })
+            (group.project, group.sessions.map { $0.id == sessionId ? $0.markedDead() : $0 })
         }
         applyFilter(animated: true)   // the killed row slides down to its cold slot as it dies
     }
@@ -167,7 +168,7 @@ final class SessionListViewModel: ObservableObject {
     /// still-exiting process can't reconcile back to a live row mid-teardown.
     private func suppressKilled(_ rows: [ChatSession]) -> [ChatSession] {
         guard !killing.isEmpty else { return rows }
-        return rows.map { killing.contains($0.sessionId) ? $0.markedDead() : $0 }
+        return rows.map { killing.contains($0.id) ? $0.markedDead() : $0 }
     }
 
     // MARK: Query (typeahead)
@@ -216,7 +217,7 @@ final class SessionListViewModel: ObservableObject {
     /// ⌘↓ — drill into the project the cursor is in: show only it, fully revealed.
     func focusSelectedProject() {
         guard focusedProject == nil,
-              let project = groups.first(where: { g in g.sessions.contains { $0.sessionId == selection } })?.project
+              let project = groups.first(where: { g in g.sessions.contains { $0.id == selection } })?.project
         else { return }
         focusedProject = project
         applyFilter()
@@ -240,9 +241,9 @@ final class SessionListViewModel: ObservableObject {
     func move(by delta: Int) {
         let flat = visibleFlat
         guard !flat.isEmpty else { selection = nil; return }
-        let cur = flat.firstIndex { $0.sessionId == selection } ?? -1
+        let cur = flat.firstIndex { $0.id == selection } ?? -1
         let next = max(0, min(flat.count - 1, cur + delta))
-        selection = flat[next].sessionId
+        selection = flat[next].id
     }
 
     // MARK: Filtering
@@ -307,8 +308,10 @@ final class SessionListViewModel: ObservableObject {
     /// drives the row insertion/removal transitions and the re-sort slide.
     private func commit(_ newGroups: [DisplayGroup], animated: Bool) {
         guard animated else {
+            suppressAnimations = true
             groups = newGroups
             reconcileSelection()
+            DispatchQueue.main.async { [weak self] in self?.suppressAnimations = false }
             return
         }
         withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
@@ -320,14 +323,14 @@ final class SessionListViewModel: ObservableObject {
     /// Keep a valid selection: preserve if still visible, else first row.
     private func reconcileSelection() {
         let flat = groups.flatMap(\.sessions)
-        if selection == nil || !flat.contains(where: { $0.sessionId == selection }) {
-            selection = flat.first?.sessionId
+        if selection == nil || !flat.contains(where: { $0.id == selection }) {
+            selection = flat.first?.id
         }
     }
 
     private func selectedWorkspaceFolderPath() -> String? {
         let project = focusedProject
-            ?? groups.first(where: { group in group.sessions.contains { $0.sessionId == selection } })?.project
+            ?? groups.first(where: { group in group.sessions.contains { $0.id == selection } })?.project
         guard let project else { return nil }
         return workspaceFolderPath(for: project)
     }

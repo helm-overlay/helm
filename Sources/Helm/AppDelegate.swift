@@ -61,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("Helm: failed to register jump hotkey (⌥⇧Space may be taken).")
         }
 
-        model.reloadInBackground()        // warm both caches so the first summon is instant
+        model.reloadInBackground(animated: false) // warm both caches so the first summon is instant
         tasksModel.reloadInBackground()
         startReaping()
 
@@ -86,7 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installKeyMonitor()
         model.startTicking()
         tasksModel.startTicking()
-        model.reloadInBackground()
+        model.reloadInBackground(animated: false)
         tasksModel.reloadInBackground()
     }
 
@@ -124,7 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let next = SessionStore.nextAttentionSession(in: SessionStore().load(), after: after)
             await MainActor.run {
                 guard let next else { NSSound.beep(); return }
-                self.jumpCursor = next.sessionId
+                self.jumpCursor = next.id
                 if self.panel.isVisible { self.hide() }
                 TerminalDispatcher.resume(next)
             }
@@ -134,7 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func killSelected() {
         guard let s = model.selectedSession, let pid = s.pid else { return }
         TerminalDispatcher.closePane(pid: pid)
-        model.kill(sessionId: s.sessionId, pid: pid)
+        model.kill(s, pid: pid)
     }
 
     private func addWorkspaceFolders() {

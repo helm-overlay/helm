@@ -26,12 +26,40 @@ public struct ProcessRunner {
         let outPipe = Pipe(), errPipe = Pipe()
         p.standardOutput = outPipe
         p.standardError = errPipe
+        var outData = Data()
+        var errData = Data()
+        let group = DispatchGroup()
+        group.enter()
+        outPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                group.leave()
+            } else {
+                outData.append(data)
+            }
+        }
+        group.enter()
+        errPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                group.leave()
+            } else {
+                errData.append(data)
+            }
+        }
         do { try p.run() } catch {
+            outPipe.fileHandleForReading.readabilityHandler = nil
+            errPipe.fileHandleForReading.readabilityHandler = nil
+            group.leave()
+            group.leave()
             return Result(status: -1, stderr: "\(error)")
         }
         p.waitUntilExit()
-        let out = String(decoding: outPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        let err = String(decoding: errPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        group.wait()
+        let out = String(decoding: outData, as: UTF8.self)
+        let err = String(decoding: errData, as: UTF8.self)
         return Result(status: p.terminationStatus, stdout: out, stderr: err)
     }
 }

@@ -6,4 +6,5 @@ protocol SessionBackend {
     func readHistory() -> [HistoryRecord]
     func idleReason(for session: ChatSession) -> IdleReason?
     func aliveSessionIds() -> Set<String>?
+    func clearState(sessionId: String)
 }

@@ -125,16 +125,18 @@ xcodebuild -project Helm.xcodeproj -scheme HelmProbe -configuration Debug \
   -derivedDataPath build build
 ./build/Build/Products/Debug/HelmProbe
 
-xcodebuild -project Helm.xcodeproj -scheme HelmCoreTests \
+xcodebuild -project Helm.xcodeproj -scheme HelmCore \
   -destination 'platform=macOS' test
 ```
 
 Dev helper:
 
 ```sh
-bin/dev cli    # build ProjectCLI Debug and symlink ~/.local/bin/project to it
-bin/dev app    # build Debug Helm.app and install bundled CLI symlink
-bin/dev ship   # Release build, copy to /Applications, install CLI symlink
+bin/dev cli    # generate project, build ProjectCLI Debug, symlink ~/.local/bin/project to it
+bin/dev app    # generate project, build Debug Helm.app, install bundled CLI symlink
+bin/dev ship   # generate project, Release build, copy to /Applications, install CLI symlink
+bin/dev test   # generate project and run HelmCore tests
+bin/dev check  # generate project, run tests, and build Debug Helm.app
 bin/dev where  # show active project CLI build
 ```
 

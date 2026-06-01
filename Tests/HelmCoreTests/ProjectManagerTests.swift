@@ -194,7 +194,7 @@ final class ProjectManagerTests: XCTestCase {
         env.installRunner { _, args, _ in
             if args == ["git", "rev-parse", "--git-dir"] { return .init(status: 0) }
             if args == ["git", "status", "--porcelain"] { return .init(status: 0) }
-            if args == ["git", "log", "--branches", "--not", "--remotes", "--oneline"] {
+            if args == ["git", "log", "HEAD", "--not", "--remotes", "--oneline"] {
                 return .init(status: 0, stdout: "abc1234 wip: new thing\n")
             }
             return .init(status: 0)
