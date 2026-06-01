@@ -41,9 +41,10 @@ Session manager inputs:
   - Filename is the `sessionId`.
   - Helm reads transcript heads for `cwd`, `gitBranch`, `aiTitle`, `entrypoint`, and mtime.
   - `agent-*.jsonl` subagent transcripts and SDK/hook-created sessions are filtered out.
-- Idle classification hook state: `~/.helm/state/<sessionId>.json`
-  - Expected `reason` values are `needs_input` and `done` (`done` maps to `needsReview`).
-  - Hook files are authoritative for idle rows when present; otherwise Helm falls back to transcript-tail heuristics.
+- Hook run/attention state: `~/.helm/state/<sessionId>.json`
+  - `reason` values: `needs_input`, `done` (→ `needsReview`), and `running` (working; reads as no attention verdict). Unknown/`running` → falls through to the live registry + tail heuristics.
+  - Authoritative for **any** live row, not just idle ones: a `needs_input`/`done` verdict promotes even a busy row to an attention row (`SessionStore.resolveLiveRow`). That's how a mid-turn AskUserQuestion surfaces while the registry still says busy.
+  - Written by the `helm` Claude plugin (install with `helm init claude` — see `ClaudeHooksPlugin`), which owns SessionStart/UserPromptSubmit/PreToolUse(AskUserQuestion)/PostToolUse(AskUserQuestion)/Stop/SessionEnd. The Stop verdict is still a Haiku agent hook.
   - The app reaps files whose sessions are no longer alive every 2 minutes and clears a file when it kills a session itself.
 
 Task manager inputs:

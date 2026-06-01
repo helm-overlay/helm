@@ -50,9 +50,12 @@ struct ClaudeSessionBackend: SessionBackend {
         return out
     }
 
-    func idleReason(for session: ChatSession) -> IdleReason? {
+    func stateFileReason(for session: ChatSession) -> IdleReason? {
         readStateFile(sessionId: session.sessionId)
-            ?? locateTranscript(session.sessionId).flatMap(SessionIO.readTail).map(SessionStore.classifyIdleTail)
+    }
+
+    func classifyTail(for session: ChatSession) -> IdleReason? {
+        locateTranscript(session.sessionId).flatMap(SessionIO.readTail).map(SessionStore.classifyIdleTail)
     }
 
     func aliveSessionIds() -> Set<String>? {

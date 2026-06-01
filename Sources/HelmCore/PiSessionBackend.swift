@@ -27,9 +27,12 @@ struct PiSessionBackend: SessionBackend {
         }
     }
 
-    func idleReason(for session: ChatSession) -> IdleReason? {
+    func stateFileReason(for session: ChatSession) -> IdleReason? {
         readStateFile(sessionId: session.sessionId)
-            ?? session.transcriptPath.map(URL.init(fileURLWithPath:)).flatMap(SessionIO.readTail).map(Self.classifyIdleTail)
+    }
+
+    func classifyTail(for session: ChatSession) -> IdleReason? {
+        session.transcriptPath.map(URL.init(fileURLWithPath:)).flatMap(SessionIO.readTail).map(Self.classifyIdleTail)
     }
 
     func aliveSessionIds() -> Set<String>? {

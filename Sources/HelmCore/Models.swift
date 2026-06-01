@@ -62,6 +62,10 @@ public struct ChatSession: Identifiable, Equatable {
     }
 
     public func with(idleReason: IdleReason?) -> ChatSession {
+        with(state: state, idleReason: idleReason)
+    }
+
+    public func with(state: SessionState, idleReason: IdleReason?) -> ChatSession {
         ChatSession(sessionId: sessionId, cwd: cwd, project: project, label: label,
                     state: state, kind: kind, pid: pid, lastActive: lastActive,
                     branch: branch, idleReason: idleReason,

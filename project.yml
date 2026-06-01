@@ -40,6 +40,16 @@ targets:
       - path: Sources/HelmProbe
     dependencies:
       - target: HelmCore
+  HelmCLI:
+    type: tool
+    platform: macOS
+    settings:
+      base:
+        PRODUCT_NAME: helm
+    sources:
+      - path: Sources/HelmCLI
+    dependencies:
+      - target: HelmCore
   HelmCoreTests:
     type: bundle.unit-test
     platform: macOS
@@ -58,3 +68,7 @@ schemes:
     test:
       targets:
         - HelmCoreTests
+  helm:
+    build:
+      targets:
+        HelmCLI: all

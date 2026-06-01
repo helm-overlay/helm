@@ -35,14 +35,16 @@ public struct SessionStore {
 
     // MARK: Public API
 
-    /// Full merged list, ready to display. Idle rows get a needs-input/done reason from
-    /// the Stop-hook's state file when it's at least as fresh as the transcript;
-    /// otherwise we fall back to the in-process structural classify of the tail. Only
-    /// idle rows pay any of this IO.
+    /// Full merged list, ready to display. Every live row is resolved against its hook
+    /// state file (`~/.helm/state`): a `needs_input`/`done` verdict wins outright — even on
+    /// a row the registry still reports busy, which is how a mid-turn AskUserQuestion
+    /// surfaces. Idle rows with no verdict fall back to the in-process tail classify. Cold
+    /// rows pay no IO.
     public func load() -> [ChatSession] {
         merge(live: readLive(), history: readHistory()).map { s in
-            guard s.state == .liveIdle else { return s }
-            return s.with(idleReason: backend(for: s.agent)?.idleReason(for: s))
+            guard s.isLive, let b = backend(for: s.agent) else { return s }
+            return Self.resolveLiveRow(s, stateReason: b.stateFileReason(for: s),
+                                       classifyTail: { b.classifyTail(for: s) })
         }
     }
 
@@ -59,9 +61,17 @@ public struct SessionStore {
     /// registry holds a session we have no row for yet (started after the last full scan);
     /// the caller does one full reload to pull its history/label.
     public func refreshLiveState(_ rows: [ChatSession]) -> (rows: [ChatSession], newSessions: Bool) {
-        Self.reconcileLive(rows, live: readLive()) { row in
-            return backend(for: row.agent)?.idleReason(for: row)
+        let (reconciled, newSessions) = Self.reconcileLive(rows, live: readLive()) { row in
+            guard let b = backend(for: row.agent) else { return nil }
+            return b.stateFileReason(for: row) ?? b.classifyTail(for: row)
         }
+        // reconcileLive only resolves idle rows; a hook verdict on a still-busy row (a
+        // mid-turn AskUserQuestion) overrides that here, mirroring `load()`.
+        let resolved = reconciled.map { s -> ChatSession in
+            guard s.state == .liveBusy, let r = backend(for: s.agent)?.stateFileReason(for: s) else { return s }
+            return s.with(state: .liveIdle, idleReason: r)
+        }
+        return (resolved, newSessions)
     }
 
     // MARK: Pure logic (unit-tested without the filesystem)
@@ -188,6 +198,20 @@ public struct SessionStore {
     static func state(forStatus status: String?, isLive: Bool) -> SessionState {
         guard isLive else { return .cold }
         return status == "busy" ? .liveBusy : .liveIdle
+    }
+
+    /// Fold a live row's hook-state verdict into its final display state. `stateReason` is
+    /// the `~/.helm/state` verdict (nil = no file, or a non-attention `running` marker);
+    /// `classifyTail` is the lazy in-process fallback, run only for an idle row with no
+    /// verdict. A verdict promotes even a busy row to `.liveIdle` so a session that paused
+    /// to ask (AskUserQuestion) doesn't hide behind its busy status. Cold rows pass through.
+    static func resolveLiveRow(_ s: ChatSession, stateReason: IdleReason?,
+                               classifyTail: () -> IdleReason?) -> ChatSession {
+        switch s.state {
+        case .cold:     return s
+        case .liveBusy: return stateReason.map { s.with(state: .liveIdle, idleReason: $0) } ?? s
+        case .liveIdle: return s.with(idleReason: stateReason ?? classifyTail())
+        }
     }
 
     /// Classify an idle session's transcript tail into needs-input vs done. Pure, so it
