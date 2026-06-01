@@ -85,6 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.startTicking()
         tasksModel.startTicking()
         model.reloadInBackground(animated: false)
+        model.resetNav()                  // each summon begins focused on the LIVE rail
         tasksModel.reloadInBackground()
     }
 
@@ -92,7 +93,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         removeKeyMonitor()
         model.stopTicking()
         tasksModel.stopTicking()
-        model.exitFocus()
         panel.orderOut(nil)
     }
 
@@ -236,15 +236,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleSessions(_ event: NSEvent, cmd: Bool, option: Bool) -> Bool {
         switch Int(event.keyCode) {
-        case kVK_Escape:
-            if model.focusedProject != nil { model.exitFocus() } else { hide() }
-            return true
+        case kVK_Escape:      hide();                                      return true
         case kVK_Return, kVK_ANSI_KeypadEnter:
             if let s = model.selectedSession { pick(s) };   return true
-        case kVK_DownArrow where cmd: model.focusSelectedProject();       return true
-        case kVK_UpArrow where cmd:   model.exitFocus();                  return true
-        case kVK_DownArrow:   model.clearSelection(); model.move(by: 1);  return true
-        case kVK_UpArrow:     model.clearSelection(); model.move(by: -1); return true
+        case kVK_DownArrow:   model.clearSelection(); model.navDown();  return true
+        case kVK_UpArrow:     model.clearSelection(); model.navUp();    return true
+        case kVK_LeftArrow:   model.clearSelection(); model.navLeft();  return true
+        case kVK_RightArrow:  model.clearSelection(); model.navRight(); return true
         case kVK_ANSI_A where cmd: model.selectAllQuery();  return true
         case kVK_Delete:
             if cmd {

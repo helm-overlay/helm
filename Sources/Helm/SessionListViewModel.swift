@@ -8,15 +8,29 @@ struct DisplayGroup: Identifiable {
     var id: String { project }
 }
 
+/// One row in the project master column: a project with its live/cold tallies.
+struct ProjectSummary: Identifiable {
+    let project: String
+    let liveCount: Int
+    let coldCount: Int
+    var id: String { project }
+}
+
+/// Which list the keyboard is driving. Up/down navigate within the focused zone; the
+/// arrow keys cross between zones (down/up to/from LIVE; left/right between the two panes).
+enum NavZone: Equatable { case live, projects, cold }
+
 @MainActor
 final class SessionListViewModel: ObservableObject {
     @Published private(set) var groups: [DisplayGroup] = []
     @Published private(set) var query: String = ""
     @Published private(set) var querySelected: Bool = false   // ⌘A: whole query highlighted
     @Published private(set) var lastEdit: Date = Date()        // anchors the cursor blink phase
-    @Published var selection: String?          // ChatSession.id (agent-prefixed)
     @Published private(set) var now: Date = Date()   // clock for age labels; ticks while visible
-    @Published private(set) var focusedProject: String?   // drilled into one project; others hidden
+    @Published var zone: NavZone = .live                  // which list the keyboard drives
+    @Published var liveSelection: String?                 // highlighted row in the LIVE rail
+    @Published var selectedProject: String?               // master-column selection driving the detail pane
+    @Published var coldSelection: String?                 // highlighted row in the cold detail / search results
     @Published private(set) var suppressAnimations = false // true while applying a baseline panel load
 
     private var all: [(project: String, sessions: [ChatSession])] = []
@@ -81,14 +95,56 @@ final class SessionListViewModel: ObservableObject {
         applyFilter(animated: true)   // a row going live/dead slides to its new slot
     }
 
+    var isSearching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    /// Cross-project live sessions — the pinned LIVE rail. Attention-first (needs-input,
+    /// then needs-review), then newest. Hidden while searching.
+    var liveRail: [ChatSession] {
+        guard !isSearching else { return [] }
+        return all.flatMap(\.sessions).filter(\.isLive).sorted { a, b in
+            if a.needsInput != b.needsInput { return a.needsInput }
+            if a.needsReview != b.needsReview { return a.needsReview }
+            return a.lastActive > b.lastActive
+        }
+    }
+
+    /// Projects for the master column with live/cold tallies. Legacy "Other" is search-only.
+    var projectSummaries: [ProjectSummary] {
+        all.compactMap { g in
+            guard g.project != "Other" else { return nil }
+            return ProjectSummary(project: g.project,
+                                  liveCount: g.sessions.filter(\.isLive).count,
+                                  coldCount: g.sessions.filter { !$0.isLive }.count)
+        }
+    }
+
+    /// Detail-pane rows. Searching → global fuzzy matches across every project (live +
+    /// cold). Otherwise → the selected project's cold history (live lives in the rail).
+    var detailRows: [ChatSession] {
+        if isSearching {
+            let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+            return all.flatMap(\.sessions)
+                .filter { SessionStore.matches($0, query: q) }
+                .sorted { $0.lastActive > $1.lastActive }
+        }
+        guard let p = selectedProject,
+              let g = all.first(where: { $0.project == p }) else { return [] }
+        return g.sessions.filter { !$0.isLive }.sorted { $0.lastActive > $1.lastActive }
+    }
+
     var liveCount: Int { all.flatMap(\.sessions).filter(\.isLive).count }
     var totalCount: Int { all.flatMap(\.sessions).count }
 
-    /// Flattened, in display order — the navigation order for arrow keys.
-    private var visibleFlat: [ChatSession] { groups.flatMap(\.sessions) }
-
+    /// The session ↵ / ⌘X act on, resolved from the focused zone. In the projects zone
+    /// that's the selected project's first cold (else first live) row, so ⌘N lands in the
+    /// right working directory.
     var selectedSession: ChatSession? {
-        visibleFlat.first { $0.id == selection }
+        if isSearching { return detailRows.first { $0.id == coldSelection } }
+        switch zone {
+        case .live:     return liveRail.first { $0.id == liveSelection }
+        case .cold:     return detailRows.first { $0.id == coldSelection }
+        case .projects: return detailRows.first ?? liveRail.first { $0.project == selectedProject }
+        }
     }
 
     /// Synchronous reload (probe/tests).
@@ -126,8 +182,8 @@ final class SessionListViewModel: ObservableObject {
         guard query.isEmpty, let path = selectedWorkspaceFolderPath() else { return false }
         do {
             _ = try HelmConfig.removeWorkspaceFolder(path)
-            if focusedProject == URL(fileURLWithPath: path).lastPathComponent {
-                focusedProject = nil
+            if selectedProject == URL(fileURLWithPath: path).lastPathComponent {
+                selectedProject = nil   // reconciles to another project on the next load
             }
             reloadInBackground()
             return true
@@ -214,36 +270,91 @@ final class SessionListViewModel: ObservableObject {
 
     func clearSelection() { querySelected = false }
 
-    /// ⌘↓ — drill into the project the cursor is in: show only it, fully revealed.
-    func focusSelectedProject() {
-        guard focusedProject == nil,
-              let project = groups.first(where: { g in g.sessions.contains { $0.id == selection } })?.project
-        else { return }
-        focusedProject = project
-        applyFilter()
+    // MARK: Navigation
+    //
+    // Three zones stacked LIVE (top) over PROJECTS | COLD (side by side). Up/down move
+    // within the focused zone and only cross at its edge: down off the last LIVE row drops
+    // into PROJECTS; up off the top of either pane returns to LIVE. Left/right cross between
+    // the two panes (PROJECTS ⇄ COLD). While searching it's one flat results list.
+
+    func navDown() {
+        if isSearching { step(&coldSelection, in: detailRows, by: 1); return }
+        switch zone {
+        case .live:     if !step(&liveSelection, in: liveRail, by: 1) { enterProjects() }
+        case .projects: stepProject(by: 1)
+        case .cold:     step(&coldSelection, in: detailRows, by: 1)
+        }
     }
 
-    /// Mouse path: the "+N older" tail toggles focus on its project.
-    func toggleFocus(_ project: String) {
-        focusedProject = (focusedProject == project) ? nil : project
-        applyFilter()
+    func navUp() {
+        if isSearching { step(&coldSelection, in: detailRows, by: -1); return }
+        switch zone {
+        case .live:     step(&liveSelection, in: liveRail, by: -1)
+        case .projects: if !stepProject(by: -1) { enterLive() }
+        case .cold:     if !step(&coldSelection, in: detailRows, by: -1) { enterLive() }
+        }
     }
 
-    /// Esc / ⌘↑ — back out of focus to the full list.
-    func exitFocus() {
-        guard focusedProject != nil else { return }
-        focusedProject = nil
-        applyFilter()
+    func navLeft()  { if zone == .cold { zone = .projects } }
+    func navRight() { if zone == .projects { enterCold() } }
+
+    /// Mouse path: clicking a project focuses the PROJECTS zone and shows its history.
+    func selectProject(_ project: String) {
+        selectedProject = project
+        coldSelection = detailRows.first?.id
+        zone = .projects
     }
 
-    // MARK: Selection
+    /// Step the highlight within `rows`; returns false (without moving) when already at the
+    /// edge in the travel direction, so callers can cross into the neighbouring zone.
+    @discardableResult
+    private func step(_ sel: inout String?, in rows: [ChatSession], by delta: Int) -> Bool {
+        guard !rows.isEmpty else { return false }
+        let cur = rows.firstIndex { $0.id == sel } ?? (delta > 0 ? -1 : rows.count)
+        let next = cur + delta
+        guard next >= 0, next < rows.count else { return false }
+        sel = rows[next].id
+        return true
+    }
 
-    func move(by delta: Int) {
-        let flat = visibleFlat
-        guard !flat.isEmpty else { selection = nil; return }
-        let cur = flat.firstIndex { $0.id == selection } ?? -1
-        let next = max(0, min(flat.count - 1, cur + delta))
-        selection = flat[next].id
+    @discardableResult
+    private func stepProject(by delta: Int) -> Bool {
+        let ps = projectSummaries
+        guard !ps.isEmpty else { return false }
+        let cur = ps.firstIndex { $0.project == selectedProject } ?? 0
+        let next = cur + delta
+        guard next >= 0, next < ps.count else { return false }
+        selectedProject = ps[next].project
+        coldSelection = detailRows.first?.id   // reset the cold highlight for the new project
+        return true
+    }
+
+    private func enterProjects() {
+        zone = .projects
+        ensureProjectSelection()
+    }
+
+    private func enterCold() {
+        guard !detailRows.isEmpty else { return }   // nothing to drill into; stay put
+        zone = .cold
+        if coldSelection == nil || !detailRows.contains(where: { $0.id == coldSelection }) {
+            coldSelection = detailRows.first?.id
+        }
+    }
+
+    private func enterLive() {
+        guard !liveRail.isEmpty else { return }      // no rail to return to; stay put
+        zone = .live
+        if liveSelection == nil || !liveRail.contains(where: { $0.id == liveSelection }) {
+            liveSelection = liveRail.last?.id        // land on the row nearest the panes
+        }
+    }
+
+    /// Each summon starts focused on the LIVE rail (falling back to PROJECTS if nothing is
+    /// running), so the keyboard always begins from a predictable place.
+    func resetNav() {
+        zone = liveRail.isEmpty ? .projects : .live
+        reconcileSelection()
     }
 
     // MARK: Filtering
@@ -254,16 +365,6 @@ final class SessionListViewModel: ObservableObject {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         let searching = !q.isEmpty
         let clock = now
-
-        // Focus mode: one project, fully revealed (no cap, no recency cutoff). Typing exits
-        // focus into the cross-project search below.
-        if !searching, let focus = focusedProject {
-            if let group = all.first(where: { $0.project == focus }), !group.sessions.isEmpty {
-                commit([DisplayGroup(project: group.project, sessions: group.sessions, hiddenCount: 0)], animated: animated)
-                return
-            }
-            focusedProject = nil   // focused project vanished — fall through to the full list
-        }
 
         let filtered: [DisplayGroup] = all.compactMap { group in
             // While searching, span everything — every project (incl. legacy "Other"),
@@ -320,18 +421,32 @@ final class SessionListViewModel: ObservableObject {
         }
     }
 
-    /// Keep a valid selection: preserve if still visible, else first row.
+    /// Keep every zone's selection valid as rows appear/leave: the master project first
+    /// (the detail depends on it), then the live and cold highlights, then the focused zone
+    /// itself (don't sit in an empty rail/detail).
     private func reconcileSelection() {
-        let flat = groups.flatMap(\.sessions)
-        if selection == nil || !flat.contains(where: { $0.id == selection }) {
-            selection = flat.first?.id
+        ensureProjectSelection()
+        if liveSelection == nil || !liveRail.contains(where: { $0.id == liveSelection }) {
+            liveSelection = liveRail.first?.id
+        }
+        if coldSelection == nil || !detailRows.contains(where: { $0.id == coldSelection }) {
+            coldSelection = detailRows.first?.id
+        }
+        if zone == .live && liveRail.isEmpty { zone = .projects }
+        if zone == .cold && detailRows.isEmpty { zone = .projects }
+    }
+
+    /// Keep a valid master selection: preserve if still present, else the project of the
+    /// most-attention-worthy live session, else the first project.
+    private func ensureProjectSelection() {
+        let ps = projectSummaries
+        if selectedProject == nil || !ps.contains(where: { $0.project == selectedProject }) {
+            selectedProject = liveRail.first?.project ?? ps.first?.project
         }
     }
 
     private func selectedWorkspaceFolderPath() -> String? {
-        let project = focusedProject
-            ?? groups.first(where: { group in group.sessions.contains { $0.id == selection } })?.project
-        guard let project else { return nil }
+        guard let project = selectedProject else { return nil }
         return workspaceFolderPath(for: project)
     }
 
