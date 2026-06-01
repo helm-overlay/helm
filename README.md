@@ -71,31 +71,17 @@ xcodebuild -project Helm.xcodeproj -scheme HelmCore \
   -destination 'platform=macOS' test          # run unit tests
 ```
 
-## Dev loop for the `project` CLI
+## Dev loop
 
-The `project` CLI (`Sources/ProjectCLI/`) ships bundled inside `Helm.app` —
-once you install Helm to `/Applications/`, `~/.local/bin/project` points at the
-binary inside the app bundle. That's frozen at install time, so during dev
-you need to switch the symlink to whatever build you're iterating on.
-
-The CLI's own `install-cli` subcommand does the switch: it symlinks
-`~/.local/bin/project` to whichever copy of the binary you invoke it from. So
-the dev loop is "rebuild → run install-cli from the new binary." `bin/dev`
-wraps that:
+`bin/dev` wraps the common build/test invocations:
 
 ```sh
-bin/dev cli       # rebuild ProjectCLI Debug + symlink ~/.local/bin/project at it
-bin/dev app       # rebuild full Helm.app Debug (CLI bundled in)
-bin/dev ship      # generate project, rebuild Release, copy to /Applications, symlink onto $PATH
+bin/dev app       # rebuild full Helm.app Debug
+bin/dev ship      # rebuild Release, copy to /Applications
 bin/dev test      # generate project and run HelmCore unit tests
 bin/dev check     # generate project, run tests, and build Debug Helm.app
-bin/dev where     # which build is active on $PATH?  (alias for `project where`)
 ```
 
-After `bin/dev cli`, `project` on your PATH IS your Debug build — edit code,
-re-run `bin/dev cli`, immediately runnable. To return to the installed
-version: `/Applications/Helm.app/Contents/MacOS/project install-cli`.
-
-`project where` shows the running binary path, the `~/.local/bin/project`
-symlink target, and whether they match — so you can always tell at a glance
-whether you're on dev or shipped.
+> Helm no longer ships the `project` CLI — it now lives as a standalone Python
+> tool (`~/Home/dev/utils/projects-cli/`, symlinked at `~/.local/bin/project`).
+> Helm is the session overlay only.

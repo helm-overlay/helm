@@ -64,8 +64,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.reloadInBackground(animated: false) // warm both caches so the first summon is instant
         tasksModel.reloadInBackground()
         startReaping()
-
-        // Helm no longer prompts to install the bundled project CLI on first launch.
     }
 
     private func startReaping() {

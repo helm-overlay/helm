@@ -53,17 +53,13 @@ All highest-priority audit fixes are complete as of 2026-05-30.
 - Consider typed Codable transcript parsers for key formats instead of widespread `[String: Any]` parsing, while preserving robustness for partial/unknown lines.
 - Add a small logging/diagnostics layer instead of silent `try?` in important side-effect paths.
 
-## Project CLI / ProjectManager improvements
+## Project CLI / ProjectManager (removed from Helm)
 
-- Allow branch names containing `/`; real Git branches often use `feature/foo`. Encode directory names or map branch names safely.
-- `AddWorktreeError.sourceNotGitWorkingTree` appears unreachable. Either check it in `addWorktree` or remove it.
-- `branchExists` should verify `refs/heads/<branch>` to avoid tag or remote ambiguity.
-- Support remote base branches (`origin/main`, `origin/master`) when local `main`/`master` does not exist.
-- `copyEnvFiles` silently skips or fails if destination files exist; `project sync` should report conflicts or optionally overwrite.
-- `project new` is not atomic if token replacement fails after copy. Consider a `.partial` temp directory followed by rename.
-- Consider Swift Argument Parser for CLI parsing/help/completions once the command surface grows.
-- Add `project status` to show dirty/unpushed state across all project worktrees.
-- Add shell completions for project names, repos, worktrees, and branches.
+The Swift `project` CLI, `HelmCore.ProjectManager`, and `ProcessRunner` were removed
+(2026-06-01). Project/worktree management now lives in a standalone Python `project`
+tool (`~/Home/dev/utils/projects-cli/`, symlinked at `~/.local/bin/project`); Helm is
+the session overlay only. The improvement ideas that were listed here no longer apply
+to this repo — carry them to the Python tool if still wanted.
 
 ## UI / UX feature ideas
 
@@ -72,11 +68,10 @@ All highest-priority audit fixes are complete as of 2026-05-30.
 - Make `⌘N` use the selected row’s agent when a row is selected; otherwise use `defaultAgent`.
 - Add per-row actions: copy session ID, copy cwd, reveal transcript, reveal project, kill, open fresh chat here.
 - Add notifications or a subtle menu-bar badge for new `needsInput` while the panel is closed.
-- Add a project command palette: open repo, add worktree, sync, remove, show dirty status.
 - Add a diagnostics pane: config path, enabled agents, live registry counts, transcript scan counts, hook state health, last refresh time.
 - Add task creation, status filters, due/check-in editing, and Slack desktop deep-link rewrite.
 - Add a menu bar item for status / settings / quit; LSUIElement apps otherwise lack discoverability.
-- Consider an onboarding/first-run health check for Terminal automation permissions, CLI install, hooks, and config.
+- Consider an onboarding/first-run health check for Terminal automation permissions, hooks, and config.
 
 ## Features / code to remove or simplify
 

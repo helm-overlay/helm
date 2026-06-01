@@ -4,9 +4,11 @@ Guidance for agents working in this repository.
 
 ## What Helm is
 
-Helm is a macOS Swift app and companion CLI for managing agent/Claude Code sessions and the user's project workspace.
+Helm is a macOS Swift app for managing agent/Claude Code sessions.
 
-The main app is a non-activating `NSPanel` overlay summoned by global hotkeys. Its primary view lists Claude sessions grouped by project, classifies live idle sessions by whether they need user input vs review, and opens/resumes chats in the configured terminal. A secondary view lists tasks from a local markdown task vault. The bundled `project` CLI manages `~/projects/<project>/<repo>/<branch>` worktrees and project templates.
+The main app is a non-activating `NSPanel` overlay summoned by global hotkeys. Its primary view lists Claude sessions grouped by project, classifies live idle sessions by whether they need user input vs review, and opens/resumes chats in the configured terminal. A secondary view lists tasks from a local markdown task vault.
+
+Project/worktree management is NOT Helm's job — that lives in a standalone Python `project` CLI (`~/Home/dev/utils/projects-cli/`, symlinked at `~/.local/bin/project`). Helm is the session overlay only.
 
 ## Repository layout
 
@@ -14,23 +16,19 @@ The main app is a non-activating `NSPanel` overlay summoned by global hotkeys. I
 - `Sources/HelmCore/` — testable data/model layer.
   - `SessionStore.swift` joins live Claude registry files with transcript history, groups/sorts sessions, classifies idle tails, reaps stale hook state, and exposes live-only refresh logic.
   - `Models.swift` defines `ChatSession`, `LiveRecord`, `HistoryRecord`, session/idle states, and placeholder rows.
-  - `ProjectManager.swift` owns project discovery, project creation, repo resolution, git worktree add/remove, and sync of `.env`/`.claude`/`CLAUDE.md` context files.
   - `TaskStore.swift`, `TaskModels.swift`, `TaskMutator.swift` read and mutate the markdown task vault.
   - `HelmConfig.swift` loads `~/.config/helm/config.json`.
-  - `ProcessRunner.swift` is the seam for shelling out, so tests can stub git/process calls.
 - `Sources/Helm/` — macOS app/UI.
-  - `AppDelegate.swift` wires hotkeys, panel lifecycle, key handling, session/task actions, state reaping, and first-run CLI install prompt.
-  - `RootView.swift` switches between sessions, tasks, and new-project form.
+  - `AppDelegate.swift` wires hotkeys, panel lifecycle, key handling, session/task actions, and state reaping.
+  - `RootView.swift` switches between the sessions and tasks views.
   - `OverlayView.swift` renders session rows and orbit status indicator.
   - `SessionListViewModel.swift` maintains grouped/filtered sessions, live refresh, selection, kill flow, and project focus.
   - `TaskListView.swift` and `TaskListViewModel.swift` render/filter/cycle task rows.
-  - `ProjectCreateView.swift` and `ProjectCreateViewModel.swift` implement the new-project form.
   - `TerminalDispatcher.swift` opens/resumes Claude in Terminal.app/iTerm and focuses existing tabs by TTY when possible.
-  - `OverlayPanel.swift`, `GlobalHotKey.swift`, `PanelTextField.swift`, `Components.swift`, `CLIInstaller.swift` are UI/platform helpers.
-- `Sources/ProjectCLI/` — bundled `project` CLI.
+  - `OverlayPanel.swift`, `GlobalHotKey.swift`, `Components.swift` are UI/platform helpers.
 - `Sources/HelmProbe/` — CLI that prints the merged session tree for debugging.
 - `Tests/HelmCoreTests/` — unit tests for pure core logic and temp-filesystem readers.
-- `bin/dev` — local dev helper for rebuilding app/CLI and installing the CLI symlink.
+- `bin/dev` — local dev helper for rebuilding and testing the app.
 
 ## External data and state
 
@@ -53,13 +51,6 @@ Task manager inputs:
 - Vault: `~/Home/task-vault/tasks/*.md` and `~/Home/task-vault/archive/*.md`.
 - Markdown files use flat YAML frontmatter. The parser intentionally matches the existing Python/widget behavior.
 - Status mutation shells out to `~/Home/task-vault/_bin/set-status.py`, falling back to the legacy Übersicht widget path.
-
-Project manager defaults:
-
-- Projects live in `~/projects`.
-- Template lives in `~/projects/.template`.
-- Repo lookup roots are `~/Home/dev/repos` and `~/Home/dev/utils`.
-- Worktree layout is `~/projects/<project>/<repo>/<branch>/`.
 
 User config:
 
@@ -100,16 +91,6 @@ Config path: `~/.config/helm/config.json`. Missing/malformed config falls back t
 - Cycling uses a short optimistic override and freezes row order briefly to avoid click jank.
 - Active sort is by status rank (`wip`, `todo`, `blocked`, `done`) then mtime desc; archive search results are capped.
 
-### Project creation and CLI
-
-- `project new <name>` creates from `~/projects/.template` and replaces `<project-name>` in `PROJECT.md`.
-- Project names must be lowercase kebab-case: letters/digits/hyphens, start with alnum, no trailing or double hyphen.
-- `project add <repo> [branch]` resolves repo by path or by search order: current project sibling, `~/Home/dev/repos`, `~/Home/dev/utils`.
-- New worktree branches are created off `master`, falling back to `main`; existing local branches are attached.
-- After adding/syncing a worktree, copy `.env`/`.env.local`, symlink root `CLAUDE.md`/`CLAUDE.local.md`, and symlink top-level `.claude` entries except runtime/state denylist entries.
-- `project rm` refuses dirty or unpushed worktrees unless forced.
-- The app bundles the `project` CLI and can prompt to symlink it to `~/.local/bin/project`.
-
 ## Development commands
 
 Generate the Xcode project first if needed:
@@ -132,27 +113,24 @@ xcodebuild -project Helm.xcodeproj -scheme HelmCore \
 Dev helper:
 
 ```sh
-bin/dev cli    # generate project, build ProjectCLI Debug, symlink ~/.local/bin/project to it
-bin/dev app    # generate project, build Debug Helm.app, install bundled CLI symlink
-bin/dev ship   # generate project, Release build, copy to /Applications, install CLI symlink
+bin/dev app    # generate project, build Debug Helm.app
+bin/dev ship   # generate project, Release build, copy to /Applications
 bin/dev test   # generate project and run HelmCore tests
 bin/dev check  # generate project, run tests, and build Debug Helm.app
-bin/dev where  # show active project CLI build
 ```
 
 ## Testing expectations
 
-- Prefer adding or updating `HelmCoreTests` for behavior changes in parsing, grouping, sorting, classification, project/worktree logic, and config.
-- Keep filesystem-dependent tests in temporary directories; do not touch real `~/.claude`, `~/.helm`, `~/projects`, or task vault paths from tests.
-- Stub process execution through `ProcessRunner` for git/worktree behavior. Avoid shelling out in unit tests unless the production code already does and a temp fixture is safe.
+- Prefer adding or updating `HelmCoreTests` for behavior changes in parsing, grouping, sorting, classification, and config.
+- Keep filesystem-dependent tests in temporary directories; do not touch real `~/.claude`, `~/.helm`, or task vault paths from tests.
 - For UI-only changes, still run the core test suite when logic in view models or core stores changes.
 
 ## Implementation notes and pitfalls
 
-- Keep `HelmCore` headless and testable. UI files should not become the source of truth for parsing/session/task/project logic.
+- Keep `HelmCore` headless and testable. UI files should not become the source of truth for parsing/session/task logic.
 - `SessionStore.historyCache` is process-wide and keyed by path + mtime; preserve this performance characteristic when touching transcript scanning.
 - Transcript reads intentionally avoid loading huge JSONL files wholesale. Head reading skips giant lines; tail reading is bounded.
 - `SessionListViewModel` and `TaskListViewModel` are `@MainActor`; do expensive filesystem/process work in detached tasks and publish back on the main actor.
-- `NSPanel` is non-activating/LSUIElement. Some normal menu/responder behavior is absent; `AppDelegate` explicitly forwards standard edit shortcuts while the new-project form is active.
+- `NSPanel` is non-activating/LSUIElement. Some normal menu/responder behavior is absent.
 - `TerminalDispatcher` uses AppleScript and TTY matching. Be careful with shell quoting and AppleScript string escaping.
 - Do not commit generated `Helm.xcodeproj`, `build/`, or `DerivedData/`.

@@ -2,16 +2,10 @@
 # bin/dev — Helm dev-loop helper.
 #
 # Usage:
-#   bin/dev cli       rebuild ProjectCLI Debug + symlink ~/.local/bin/project at it
-#   bin/dev app       rebuild full Helm.app Debug (bundles CLI)
+#   bin/dev app       rebuild full Helm.app Debug
 #   bin/dev ship      rebuild Helm.app Release, install to /Applications
 #   bin/dev test      generate project + run HelmCore tests
 #   bin/dev check     generate project + run tests + Debug app build
-#   bin/dev where     show which build is active on $PATH (alias for `project where`)
-#
-# After `bin/dev cli`, `project` on your PATH is your Debug build. Re-run after
-# any edit. To go back to the installed version, run:
-#   /Applications/Helm.app/Contents/MacOS/project install-cli
 
 set -e
 
@@ -28,19 +22,11 @@ ensure_project() {
 }
 
 case "${1:-}" in
-  cli)
-    ensure_project
-    xcodebuild -project Helm.xcodeproj -target ProjectCLI \
-               -configuration Debug -quiet \
-               ARCHS=arm64 ONLY_ACTIVE_ARCH=YES
-    ./build/Debug/project install-cli
-    ;;
   app)
     ensure_project
     xcodebuild -project Helm.xcodeproj -target Helm \
                -configuration Debug -quiet \
                ARCHS=arm64 ONLY_ACTIVE_ARCH=YES
-    ./build/Debug/Helm.app/Contents/MacOS/project install-cli
     echo "Helm.app at: $here/build/Debug/Helm.app"
     echo "Launch with: open ./build/Debug/Helm.app"
     ;;
@@ -50,7 +36,6 @@ case "${1:-}" in
                -configuration Release -quiet
     rm -rf /Applications/Helm.app
     cp -R ./build/Release/Helm.app /Applications/
-    /Applications/Helm.app/Contents/MacOS/project install-cli
     echo "shipped: /Applications/Helm.app"
     ;;
   test)
@@ -65,11 +50,8 @@ case "${1:-}" in
     xcodebuild -project Helm.xcodeproj -scheme Helm \
                -configuration Debug build
     ;;
-  where|"")
-    project where
-    ;;
   *)
-    echo "usage: bin/dev {cli|app|ship|test|check|where}" >&2
+    echo "usage: bin/dev {app|ship|test|check}" >&2
     exit 2
     ;;
 esac
