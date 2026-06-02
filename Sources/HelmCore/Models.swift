@@ -44,6 +44,11 @@ public struct ChatSession: Identifiable, Equatable {
     public let kind: String?         // "interactive" / "bg", live rows only
     public let pid: Int32?           // live rows only
     public let lastActive: Date      // transcript file mtime (history) or now (live-only)
+    /// One-line "what happened", written by the Stop-hook classifier alongside its verdict
+    /// (the `summary` field in the state file). Present only on an attention row whose
+    /// verdict came from the hook; the notification body uses it. nil for a tail-classified
+    /// verdict or a non-attention row.
+    public let attentionSummary: String?
 
     public var id: String { "\(agent.rawValue):\(sessionId)" }
     public var isLive: Bool { state != .cold }
@@ -54,11 +59,13 @@ public struct ChatSession: Identifiable, Equatable {
     public init(sessionId: String, cwd: String, project: String, label: String,
                 state: SessionState, kind: String?, pid: Int32?, lastActive: Date,
                 branch: String? = nil, idleReason: IdleReason? = nil,
-                agent: AgentKind = .claude, transcriptPath: String? = nil) {
+                agent: AgentKind = .claude, transcriptPath: String? = nil,
+                attentionSummary: String? = nil) {
         self.sessionId = sessionId; self.agent = agent; self.transcriptPath = transcriptPath
         self.cwd = cwd; self.project = project
         self.label = label; self.branch = branch; self.state = state; self.kind = kind
         self.pid = pid; self.lastActive = lastActive; self.idleReason = idleReason
+        self.attentionSummary = attentionSummary
     }
 
     public func with(idleReason: IdleReason?) -> ChatSession {
@@ -69,7 +76,17 @@ public struct ChatSession: Identifiable, Equatable {
         ChatSession(sessionId: sessionId, cwd: cwd, project: project, label: label,
                     state: state, kind: kind, pid: pid, lastActive: lastActive,
                     branch: branch, idleReason: idleReason,
-                    agent: agent, transcriptPath: transcriptPath)
+                    agent: agent, transcriptPath: transcriptPath,
+                    attentionSummary: attentionSummary)
+    }
+
+    /// Attach the hook's one-line summary to an already-resolved attention row.
+    public func withAttentionSummary(_ summary: String?) -> ChatSession {
+        ChatSession(sessionId: sessionId, cwd: cwd, project: project, label: label,
+                    state: state, kind: kind, pid: pid, lastActive: lastActive,
+                    branch: branch, idleReason: idleReason,
+                    agent: agent, transcriptPath: transcriptPath,
+                    attentionSummary: summary)
     }
 
     /// A dead (cold) copy — for optimistic UI after we kill the process ourselves,

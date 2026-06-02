@@ -43,8 +43,11 @@ public struct SessionStore {
     public func load() -> [ChatSession] {
         merge(live: readLive(), history: readHistory()).map { s in
             guard s.isLive, let b = backend(for: s.agent) else { return s }
-            return Self.resolveLiveRow(s, stateReason: b.stateFileReason(for: s),
-                                       classifyTail: { b.classifyTail(for: s) })
+            let resolved = Self.resolveLiveRow(s, stateReason: b.stateFileReason(for: s),
+                                               classifyTail: { b.classifyTail(for: s) })
+            // Carry the hook's one-line summary onto attention rows for the notification body.
+            return resolved.idleReason == nil ? resolved
+                : resolved.withAttentionSummary(b.stateFileSummary(for: s))
         }
     }
 

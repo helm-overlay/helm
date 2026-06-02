@@ -17,8 +17,10 @@ import Foundation
 /// - **Stop** → a Haiku agent classifies the tail and writes `needs_input` / `done`.
 /// - **SessionEnd** → clears the file.
 ///
-/// The wire format is unchanged (`{"reason","sessionId","ts"}`); `done` maps to
-/// `needsReview` (see `SessionStore.idleReason(fromState:)`).
+/// Wire format: `{"reason","sessionId","ts","summary"}`; `done` maps to `needsReview`
+/// (see `SessionStore.idleReason(fromState:)`). `summary` is the Stop classifier's one-line
+/// "what happened", read back for the notification body; the bash handlers omit it (their
+/// transitions are `running`/`needs_input` mid-turn, which carry no summary).
 public enum ClaudeHooksPlugin {
     public static let pluginName = "helm"
 
@@ -58,7 +60,7 @@ public enum ClaudeHooksPlugin {
         var obj: [String: Any] = [
             "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
             "name": pluginName,
-            "version": "0.1.0",
+            "version": "0.2.0",
             "description": "Helm session-state hooks — write attention/run state to ~/.helm/state for the Helm overlay.",
         ]
         if let author {
@@ -123,11 +125,13 @@ public enum ClaudeHooksPlugin {
           - `needs_input` if: the final sentence is a question to the user; OR the final paragraph asks them to choose/confirm/approve/answer; OR the active ask has visible remaining work the assistant did not do.
           - `done` if: the active ask is fulfilled (or the question is fully answered) AND the final message is a statement / summary / handoff — even if it ends with a soft courtesy like "let me know if you want X next". Courtesies are not asks.
 
-        (5) Run Bash: `mkdir -p \(stateDir)`.
+        (5) Write a one-line SUMMARY (≤ 10 words, plain text, no surrounding quotes, no trailing period): for `done`, what was accomplished ("Refactored auth flow, tests pass"); for `needs_input`, what you're waiting on ("Asks which migration strategy to use"). This is shown in a desktop notification, so make it specific and scannable.
 
-        (6) Use the Write tool to create `\(stateDir)/<session_id>.json` containing exactly: {"reason":"<label>","sessionId":"<session_id>","ts":<unix_epoch_seconds>} where `<label>` is literally `needs_input` or `done`.
+        (6) Run Bash: `mkdir -p \(stateDir)`.
 
-        (7) Stop. Do not edit code, do not run other commands, do not output prose.
+        (7) Use the Write tool to create `\(stateDir)/<session_id>.json` containing exactly: {"reason":"<label>","sessionId":"<session_id>","ts":<unix_epoch_seconds>,"summary":"<summary>"} where `<label>` is literally `needs_input` or `done` and `<summary>` is the line from step (5) with any `"` or `\\` escaped for JSON.
+
+        (8) Stop. Do not edit code, do not run other commands, do not output prose.
         """
     }
 

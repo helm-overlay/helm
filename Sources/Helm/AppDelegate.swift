@@ -18,6 +18,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var jumpHotKey: GlobalHotKey?
     private var keyMonitor: Any?
     private var reaper: Timer?
+    private var notifyTimer: Timer?
+    private var notifier: SessionNotifier!
 
     /// Last session the jump hotkey landed on, so repeated presses cycle through the
     /// sessions wanting attention rather than re-opening the same one.
@@ -71,12 +73,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.reloadInBackground(animated: false) // warm both caches so the first summon is instant
         tasksModel.reloadInBackground()
         startReaping()
+        startNotifying()
     }
 
     private func startReaping() {
         reapDeadState()
         reaper = Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { _ in
             reapDeadState()
+        }
+    }
+
+    /// Watch session state for attention crossings and notify — independent of the panel's
+    /// own ticker, which only runs while visible. Resuming from a banner jumps into the
+    /// session, mirroring the jump hotkey.
+    private func startNotifying() {
+        notifier = SessionNotifier { [weak self] sessionId, agent, cwd in
+            self?.resumeFromNotification(sessionId: sessionId, agent: agent, cwd: cwd)
+        }
+        notifier.requestAuthorization()
+        pollNotifications()
+        notifyTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.pollNotifications() }
+        }
+    }
+
+    private func pollNotifications() {
+        let visible = panel.isVisible
+        _Concurrency.Task.detached(priority: .utility) {
+            let rows = SessionStore().load()
+            await MainActor.run { self.notifier.reconcile(rows, panelVisible: visible) }
+        }
+    }
+
+    /// Resolve the (possibly changed) session fresh and resume it; fall back to the id/cwd
+    /// carried in the banner if it's no longer in the list.
+    private func resumeFromNotification(sessionId: String, agent: AgentKind, cwd: String?) {
+        if panel.isVisible { hide() }
+        _Concurrency.Task.detached(priority: .userInitiated) {
+            let match = SessionStore().load().first { $0.sessionId == sessionId && $0.agent == agent }
+            await MainActor.run {
+                if let match { TerminalDispatcher.resume(match) }
+                else { TerminalDispatcher.resume(sessionId: sessionId, cwd: cwd) }
+            }
         }
     }
 

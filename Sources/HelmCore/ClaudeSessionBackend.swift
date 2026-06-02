@@ -51,7 +51,11 @@ struct ClaudeSessionBackend: SessionBackend {
     }
 
     func stateFileReason(for session: ChatSession) -> IdleReason? {
-        readStateFile(sessionId: session.sessionId)
+        SessionStore.idleReason(fromState: readStateFile(sessionId: session.sessionId)?["reason"] as? String)
+    }
+
+    func stateFileSummary(for session: ChatSession) -> String? {
+        (readStateFile(sessionId: session.sessionId)?["summary"] as? String)?.nonEmpty
     }
 
     func classifyTail(for session: ChatSession) -> IdleReason? {
@@ -92,12 +96,10 @@ struct ClaudeSessionBackend: SessionBackend {
                              agent: .claude, transcriptPath: url.path)
     }
 
-    private func readStateFile(sessionId: String) -> IdleReason? {
+    private func readStateFile(sessionId: String) -> [String: Any]? {
         let url = SessionStore.stateFileURL(sessionId, home: home)
-        guard let data = try? Data(contentsOf: url),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        return SessionStore.idleReason(fromState: obj["reason"] as? String)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 
     private func locateTranscript(_ sessionId: String) -> URL? {

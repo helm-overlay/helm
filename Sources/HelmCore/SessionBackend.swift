@@ -12,6 +12,13 @@ protocol SessionBackend {
     /// In-process fallback when no hook verdict is present: structurally classify the
     /// transcript tail (needs-input vs done).
     func classifyTail(for session: ChatSession) -> IdleReason?
+    /// The one-line "what happened" the Stop-hook classifier wrote next to its verdict, if
+    /// any. Drives the notification body. Backends whose hook doesn't emit one return nil.
+    func stateFileSummary(for session: ChatSession) -> String?
     func aliveSessionIds() -> Set<String>?
     func clearState(sessionId: String)
+}
+
+extension SessionBackend {
+    func stateFileSummary(for session: ChatSession) -> String? { nil }
 }

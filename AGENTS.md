@@ -25,6 +25,7 @@ Project/worktree management is NOT Helm's job — that lives in a standalone Pyt
   - `SessionListViewModel.swift` maintains grouped/filtered sessions, live refresh, selection, kill flow, and project focus.
   - `TaskListView.swift` and `TaskListViewModel.swift` render/filter/cycle task rows.
   - `TerminalDispatcher.swift` opens/resumes Claude in Terminal.app/iTerm and focuses existing tabs by TTY when possible.
+  - `SessionNotifier.swift` posts a macOS notification when a session crosses into an attention state while the panel is closed (transition detection is `HelmCore.NotificationPlanner`).
   - `OverlayPanel.swift`, `GlobalHotKey.swift`, `Components.swift` are UI/platform helpers.
 - `Sources/HelmProbe/` — CLI that prints the merged session tree for debugging.
 - `Tests/HelmCoreTests/` — unit tests for pure core logic and temp-filesystem readers.
@@ -42,7 +43,8 @@ Session manager inputs:
   - Helm reads transcript heads for `cwd`, `gitBranch`, `aiTitle`, `entrypoint`, and mtime.
   - `agent-*.jsonl` subagent transcripts and SDK/hook-created sessions are filtered out.
 - Hook run/attention state: `~/.helm/state/<sessionId>.json`
-  - `reason` values: `needs_input`, `done` (→ `needsReview`), and `running` (working; reads as no attention verdict). Unknown/`running` → falls through to the live registry + tail heuristics.
+  - Wire shape `{"reason","sessionId","ts","summary"}`. `reason` values: `needs_input`, `done` (→ `needsReview`), and `running` (working; reads as no attention verdict). Unknown/`running` → falls through to the live registry + tail heuristics.
+  - `summary` is the Stop classifier's one-line "what happened", surfaced as the notification body (`ChatSession.attentionSummary`). The bash handlers (`running`/mid-turn `needs_input`) omit it.
   - Authoritative for **any** live row, not just idle ones: a `needs_input`/`done` verdict promotes even a busy row to an attention row (`SessionStore.resolveLiveRow`). That's how a mid-turn AskUserQuestion surfaces while the registry still says busy.
   - Written by the `helm` Claude plugin (install with `helm init claude` — see `ClaudeHooksPlugin`), which owns SessionStart/UserPromptSubmit/PreToolUse(AskUserQuestion)/PostToolUse(AskUserQuestion)/Stop/SessionEnd. The Stop verdict is still a Haiku agent hook.
   - The app reaps files whose sessions are no longer alive every 2 minutes and clears a file when it kills a session itself.
@@ -59,7 +61,8 @@ User config:
 {
   "terminal": "terminal",          // or "iterm"/"iterm2"
   "hideOlderThanDays": 1,
-  "taskEditor": ["zed"]
+  "taskEditor": ["zed"],
+  "notificationsEnabled": true     // macOS notifications on attention crossings (panel closed)
 }
 ```
 
@@ -83,6 +86,7 @@ Config path: `~/.config/helm/config.json`. Missing/malformed config falls back t
   3. otherwise `needsReview`.
 - Per-second live refresh must stay cheap: read only the live registry and per-idle verdict/tail, not all history, unless a new session appears.
 - Killing a session closes/focuses terminal panes where possible, clears hook state, optimistically marks the row cold, then SIGTERM/SIGKILLs off the main thread.
+- Notifications fire only on a fresh attention crossing (`NotificationPlanner` diffs against the prior verdict) and only while the panel is closed; the first poll after launch primes the baseline silently so a backlog of finished sessions doesn't burst. A separate 5s timer drives this since the panel's own ticker stops when hidden. Tapping a banner (or Resume) jumps into that session.
 
 ### Tasks view
 

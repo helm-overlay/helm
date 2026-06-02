@@ -49,4 +49,30 @@ final class ClaudeSessionBackendTests: XCTestCase {
         XCTAssertEqual(s1.project, "demo")
         XCTAssertEqual(merged.first { $0.sessionId == "S2" }?.state, .cold)
     }
+
+    func testLoadCarriesHookSummaryOntoAttentionRow() throws {
+        let fm = FileManager.default
+        let home = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("helm-sum-\(UUID())")
+        defer { try? fm.removeItem(at: home) }
+        let sessions = home.appendingPathComponent(".claude/sessions")
+        let projects = home.appendingPathComponent(".claude/projects/proj")
+        let stateDir = home.appendingPathComponent(".helm/state")
+        try fm.createDirectory(at: sessions, withIntermediateDirectories: true)
+        try fm.createDirectory(at: projects, withIntermediateDirectories: true)
+        try fm.createDirectory(at: stateDir, withIntermediateDirectories: true)
+
+        let myPid = ProcessInfo.processInfo.processIdentifier
+        let demo = "\(home.path)/projects/demo"
+        // An idle live session whose Stop hook wrote a `done` verdict + summary.
+        try #"{"pid":\#(myPid),"sessionId":"S1","kind":"interactive","status":"idle","entrypoint":"cli"}"#
+            .write(to: sessions.appendingPathComponent("\(myPid).json"), atomically: true, encoding: .utf8)
+        try (#"{"cwd":"\#(demo)","aiTitle":"hello","entrypoint":"cli"}"# + "\n")
+            .write(to: projects.appendingPathComponent("S1.jsonl"), atomically: true, encoding: .utf8)
+        try #"{"reason":"done","sessionId":"S1","ts":1,"summary":"Refactored the auth flow"}"#
+            .write(to: stateDir.appendingPathComponent("S1.json"), atomically: true, encoding: .utf8)
+
+        let row = SessionStore(home: home.path, workspaceFolders: [demo]).load().first { $0.sessionId == "S1" }
+        XCTAssertEqual(row?.idleReason, .needsReview)
+        XCTAssertEqual(row?.attentionSummary, "Refactored the auth flow")
+    }
 }

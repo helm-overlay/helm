@@ -55,6 +55,9 @@ public struct HelmConfig: Equatable {
     /// 0 or negative disables the cutoff (show everything).
     public var hideOlderThanDays: Int
     public var taskEditor: TaskEditor
+    /// Post a macOS notification when a watched session finishes (needs review) or blocks
+    /// awaiting input, while the overlay is dismissed. Default on.
+    public var notificationsEnabled: Bool
     public var enabledAgents: [AgentKind]
     public var defaultAgent: AgentKind
     /// User-picked folders that should appear as first-class session groups.
@@ -69,6 +72,7 @@ public struct HelmConfig: Equatable {
 
     public init(terminal: TerminalKind = .default, hideOlderThanDays: Int = 1,
                 taskEditor: TaskEditor = .default,
+                notificationsEnabled: Bool = true,
                 enabledAgents: [AgentKind] = [.claude],
                 defaultAgent: AgentKind = .claude,
                 workspaceFolders: [String] = [],
@@ -78,6 +82,7 @@ public struct HelmConfig: Equatable {
         self.terminal = terminal
         self.hideOlderThanDays = hideOlderThanDays
         self.taskEditor = taskEditor
+        self.notificationsEnabled = notificationsEnabled
         self.enabledAgents = uniqueEnabled
         self.defaultAgent = uniqueEnabled.contains(defaultAgent) ? defaultAgent : uniqueEnabled[0]
         self.workspaceFolders = Self.normalizedPaths(workspaceFolders)
@@ -130,6 +135,7 @@ public struct HelmConfig: Equatable {
             terminal: TerminalKind(parsing: obj["terminal"] as? String),
             hideOlderThanDays: (obj["hideOlderThanDays"] as? Int) ?? HelmConfig().hideOlderThanDays,
             taskEditor: TaskEditor(parsing: obj["taskEditor"]),
+            notificationsEnabled: (obj["notificationsEnabled"] as? Bool) ?? HelmConfig().notificationsEnabled,
             enabledAgents: parseAgents(obj["enabledAgents"]),
             defaultAgent: parseAgent(obj["defaultAgent"]) ?? .claude,
             workspaceFolders: parseWorkspaceFolders(obj["workspaceFolders"]),
