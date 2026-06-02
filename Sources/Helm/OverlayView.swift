@@ -4,6 +4,7 @@ import HelmCore
 
 struct OverlayView: View {
     @ObservedObject var model: SessionListViewModel
+    @ObservedObject var shell: AppShellModel
     let onPick: (ChatSession) -> Void
     let onNewChat: () -> Void
     let onDismiss: () -> Void
@@ -204,28 +205,23 @@ struct OverlayView: View {
 
     private var footer: some View {
         HStack(spacing: 16) {
-            hint("↑↓", "navigate")
-            if !model.isSearching { hint("←→", "project") }
-            hint("↵", "open")
-            hint("⌘O", "add folder")
-            hint("⌘N", "new chat")
-            hint("⌘X", "kill")
-            if model.canRemoveSelectedWorkspaceFolder { hint("⌘⌫", "remove folder") }
-            hint("esc", "dismiss")
+            HintBar(hints: hints)
             Spacer()
+            ModeSwitcher(shell: shell)
         }
-        .font(.system(size: 11))
-        .foregroundStyle(.secondary)
         .padding(.horizontal, 16).padding(.vertical, 9)
     }
 
-    private func hint(_ key: String, _ label: String) -> some View {
-        HStack(spacing: 4) {
-            Text(key).fontWeight(.semibold)
-                .padding(.horizontal, 5).padding(.vertical, 1)
-                .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
-            Text(label)
-        }
+    private var hints: [Hint] {
+        var h = [Hint(key: "↑↓", label: "navigate")]
+        if !model.isSearching { h.append(Hint(key: "←→", label: "project")) }
+        h += [Hint(key: "↵", label: "open"),
+              Hint(key: "⌘O", label: "add folder"),
+              Hint(key: "⌘N", label: "new chat"),
+              Hint(key: "⌘X", label: "kill")]
+        if model.canRemoveSelectedWorkspaceFolder { h.append(Hint(key: "⌘⌫", label: "remove folder")) }
+        h.append(Hint(key: "esc", label: "dismiss"))
+        return h
     }
 }
 

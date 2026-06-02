@@ -28,6 +28,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hotKeyMods = UInt32(optionKey)
     private let jumpHotKeyMods = UInt32(optionKey | shiftKey)
 
+    /// ANSI keyCodes for the 1–9 row keys, mapped to their digit. The codes aren't
+    /// contiguous, so they're spelled out rather than offset from kVK_ANSI_1.
+    private static let digitKeyCodes: [Int: Int] = [
+        kVK_ANSI_1: 1, kVK_ANSI_2: 2, kVK_ANSI_3: 3, kVK_ANSI_4: 4, kVK_ANSI_5: 5,
+        kVK_ANSI_6: 6, kVK_ANSI_7: 7, kVK_ANSI_8: 8, kVK_ANSI_9: 9,
+    ]
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         let root = RootView(
             shell: shell,
@@ -219,14 +226,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let cmd = event.modifierFlags.contains(.command)
         let option = event.modifierFlags.contains(.option)
 
-        // View switching: ⌘1 = sessions, ⌘2 = tasks. Global to both views.
+        // View switching: ⌘<digit> selects the view at that slot in AppView.allCases.
+        // Global to every view; a new AppView case is reachable here with no edit.
         if cmd {
-            switch Int(event.keyCode) {
-            case kVK_ANSI_1: shell.view = .sessions; return true
-            case kVK_ANSI_2: shell.view = .tasks;    return true
-            case kVK_ANSI_O: addWorkspaceFolders();  return true
-            default: break
+            if let digit = Self.digitKeyCodes[Int(event.keyCode)], let view = AppView.forDigit(digit) {
+                shell.view = view; return true
             }
+            if Int(event.keyCode) == kVK_ANSI_O { addWorkspaceFolders(); return true }
         }
         switch shell.view {
         case .sessions: return handleSessions(event, cmd: cmd, option: option)

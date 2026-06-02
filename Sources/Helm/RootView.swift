@@ -1,11 +1,37 @@
 import SwiftUI
 import HelmCore
 
-/// Which list the panel is currently showing. Switched by ⌘1 / ⌘2; the panel itself
-/// stays summoned across switches so view changes feel like flipping tabs, not
-/// summoning a new tool.
-enum AppView: String, Equatable, CaseIterable {
+/// Which list the panel is currently showing. The panel stays summoned across switches
+/// so view changes feel like flipping tabs, not summoning a new tool.
+///
+/// Case order is the source of truth: a view's ⌘-digit, its slot in the `ModeSwitcher`,
+/// and the key handler's switch all derive from `allCases`. Adding a view is a single new
+/// case here (plus its view + key handler) — no scattered ⌘N wiring to update.
+enum AppView: String, CaseIterable, Hashable {
     case sessions, tasks
+
+    var title: String {
+        switch self {
+        case .sessions: return "Sessions"
+        case .tasks:    return "Tasks"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .sessions: return "bubble.left.and.bubble.right"
+        case .tasks:    return "checklist"
+        }
+    }
+
+    /// The ⌘-digit that selects this view: its 1-based position in `allCases`.
+    var shortcutDigit: Int { (Self.allCases.firstIndex(of: self) ?? 0) + 1 }
+
+    /// The view bound to ⌘<digit>, or nil if no view occupies that slot.
+    static func forDigit(_ digit: Int) -> AppView? {
+        let idx = digit - 1
+        return allCases.indices.contains(idx) ? allCases[idx] : nil
+    }
 }
 
 /// Holds the currently-active view. Lives on AppDelegate; observed by `RootView` and
@@ -36,12 +62,14 @@ struct RootView: View {
             switch shell.view {
             case .sessions:
                 OverlayView(model: sessions,
+                            shell: shell,
                             onPick: onPickSession,
                             onNewChat: onNewChat,
                             onDismiss: onDismiss)
                     .transition(.opacity)
             case .tasks:
                 TaskListView(model: tasks,
+                             shell: shell,
                              onOpen: onOpenTask,
                              onCycle: onCycleTask,
                              onOpenSource: onOpenSource)

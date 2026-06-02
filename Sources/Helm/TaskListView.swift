@@ -10,6 +10,7 @@ import HelmCore
 /// icon on the right.
 struct TaskListView: View {
     @ObservedObject var model: TaskListViewModel
+    @ObservedObject var shell: AppShellModel
     let onOpen: (VaultTask) -> Void
     let onCycle: () -> Void
     let onOpenSource: (TaskSource) -> Void
@@ -108,24 +109,14 @@ struct TaskListView: View {
 
     private var footer: some View {
         HStack(spacing: 16) {
-            hint("↑↓", "navigate")
-            hint("↵", "open")
-            hint("⌘↵", "cycle")
-            hint("esc", "dismiss")
+            HintBar(hints: [Hint(key: "↑↓", label: "navigate"),
+                            Hint(key: "↵", label: "open"),
+                            Hint(key: "⌘↵", label: "cycle"),
+                            Hint(key: "esc", label: "dismiss")])
             Spacer()
+            ModeSwitcher(shell: shell)
         }
-        .font(.system(size: 11))
-        .foregroundStyle(.secondary)
         .padding(.horizontal, 16).padding(.vertical, 9)
-    }
-
-    private func hint(_ key: String, _ label: String) -> some View {
-        HStack(spacing: 4) {
-            Text(key).fontWeight(.semibold)
-                .padding(.horizontal, 5).padding(.vertical, 1)
-                .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
-            Text(label)
-        }
     }
 }
 
