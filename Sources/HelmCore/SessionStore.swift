@@ -284,10 +284,7 @@ public struct SessionStore {
     /// (busy, or idle pending classification), which outranks cold. This is what keeps the
     /// row the app exists to surface from sinking below busier rows or into the collapsed
     /// tail — it lands in the top slots, where `perProjectCap` always shows it.
-    public static func attentionRank(_ s: ChatSession) -> Int {
-        if s.state == .liveIdle { return s.idleReason == .needsInput ? 0 : 1 }
-        return s.isLive ? 2 : 3   // busy : cold
-    }
+    public static func attentionRank(_ s: ChatSession) -> Int { s.reason.rank }
 
     /// The next session that wants you, for the jump hotkey. Considers only attention rows
     /// (needs-input, then needs-review — never busy/cold), ordered by rank then recency, and

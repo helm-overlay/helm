@@ -8,12 +8,13 @@ import HelmCore
 /// and the key handler's switch all derive from `allCases`. Adding a view is a single new
 /// case here (plus its view + key handler) — no scattered ⌘N wiring to update.
 enum AppView: String, CaseIterable, Hashable {
-    case sessions, tasks
+    case sessions, tasks, prs
 
     var title: String {
         switch self {
         case .sessions: return "Sessions"
         case .tasks:    return "Tasks"
+        case .prs:      return "PRs"
         }
     }
 
@@ -21,6 +22,7 @@ enum AppView: String, CaseIterable, Hashable {
         switch self {
         case .sessions: return "bubble.left.and.bubble.right"
         case .tasks:    return "checklist"
+        case .prs:      return "arrow.triangle.branch"
         }
     }
 
@@ -50,11 +52,13 @@ struct RootView: View {
     @ObservedObject var shell: AppShellModel
     @ObservedObject var sessions: SessionListViewModel
     @ObservedObject var tasks: TaskListViewModel
+    @ObservedObject var prs: PRListViewModel
     let onPickSession: (ChatSession) -> Void
     let onNewChat: () -> Void
     let onOpenTask: (VaultTask) -> Void
     let onCycleTask: () -> Void
     let onOpenSource: (TaskSource) -> Void
+    let onOpenPR: (PullRequest) -> Void
     let onDismiss: () -> Void
 
     var body: some View {
@@ -73,6 +77,9 @@ struct RootView: View {
                              onOpen: onOpenTask,
                              onCycle: onCycleTask,
                              onOpenSource: onOpenSource)
+                    .transition(.opacity)
+            case .prs:
+                PRListView(model: prs, shell: shell, onOpen: onOpenPR)
                     .transition(.opacity)
             }
         }

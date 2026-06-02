@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let shell = AppShellModel()
     private let model = SessionListViewModel()
     private let tasksModel = TaskListViewModel()
+    private let prsModel = PRListViewModel()
     private var hotKey: GlobalHotKey?
     private var jumpHotKey: GlobalHotKey?
     private var keyMonitor: Any?
@@ -42,11 +43,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             shell: shell,
             sessions: model,
             tasks: tasksModel,
+            prs: prsModel,
             onPickSession:       { [weak self] in self?.pick($0) },
             onNewChat:           { [weak self] in self?.newChat() },
             onOpenTask:          { [weak self] in self?.openTask($0) },
             onCycleTask:         { [weak self] in self?.tasksModel.cycleSelected() },
             onOpenSource:        { [weak self] in self?.openSource($0) },
+            onOpenPR:            { [weak self] in self?.openPR($0) },
             onDismiss:           { [weak self] in self?.hide() })
         panel = OverlayPanel(content: NSHostingView(rootView: root))
         NotificationCenter.default.addObserver(
@@ -70,8 +73,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("Helm: failed to register jump hotkey (⌥⇧Space may be taken).")
         }
 
-        model.reloadInBackground(animated: false) // warm both caches so the first summon is instant
+        model.reloadInBackground(animated: false) // warm caches so the first summon is instant
         tasksModel.reloadInBackground()
+        prsModel.reloadInBackground()
         startReaping()
         startNotifying()
     }
@@ -129,15 +133,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installKeyMonitor()
         model.startTicking()
         tasksModel.startTicking()
+        prsModel.startTicking()
         model.reloadInBackground(animated: false)
         model.resetNav()                  // each summon begins focused on the LIVE rail
         tasksModel.reloadInBackground()
+        prsModel.reloadInBackground()
     }
 
     private func hide() {
         removeKeyMonitor()
         model.stopTicking()
         tasksModel.stopTicking()
+        prsModel.stopTicking()
         panel.orderOut(nil)
     }
 
@@ -244,6 +251,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.open(parsed)
     }
 
+    private func openPR(_ pr: PullRequest) {
+        guard let url = URL(string: pr.url) else {
+            NSLog("Helm: PR url is unopenable: \(pr.url)")
+            return
+        }
+        hide()
+        NSWorkspace.shared.open(url)
+    }
+
     // MARK: Key handling (local monitor while visible)
 
     private func installKeyMonitor() {
@@ -275,6 +291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch shell.view {
         case .sessions: return handleSessions(event, cmd: cmd, option: option)
         case .tasks:    return handleTasks(event, cmd: cmd, option: option)
+        case .prs:      return handlePRs(event, cmd: cmd, option: option)
         }
     }
 
@@ -323,6 +340,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         default: break
         }
         return appendIfPrintable(event, cmd: cmd, to: { [weak self] in self?.tasksModel.appendQuery($0) })
+    }
+
+    private func handlePRs(_ event: NSEvent, cmd: Bool, option: Bool) -> Bool {
+        switch Int(event.keyCode) {
+        case kVK_Escape:                                          hide(); return true
+        case kVK_Return, kVK_ANSI_KeypadEnter:
+            if let pr = prsModel.selectedPR { openPR(pr) };       return true
+        case kVK_DownArrow:   prsModel.clearSelection(); prsModel.move(by: 1);  return true
+        case kVK_UpArrow:     prsModel.clearSelection(); prsModel.move(by: -1); return true
+        case kVK_ANSI_A where cmd: prsModel.selectAllQuery();     return true
+        case kVK_Delete:
+            if cmd        { prsModel.clearQuery() }
+            else if option { prsModel.deleteWordBack() }
+            else           { prsModel.backspaceQuery() }
+            return true
+        default: break
+        }
+        return appendIfPrintable(event, cmd: cmd, to: { [weak self] in self?.prsModel.appendQuery($0) })
     }
 
     /// Typeahead: a printable character (no ⌘) extends the active view's filter query.
