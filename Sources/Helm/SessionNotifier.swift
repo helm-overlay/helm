@@ -23,8 +23,9 @@ final class SessionNotifier: NSObject, UNUserNotificationCenterDelegate {
     private var baseline: [String: IdleReason] = [:]
     private var primed = false
 
-    private static let category = "HELM_ATTENTION"
-    private static let resumeAction = "HELM_RESUME"
+    // nonisolated: plain string constants read from the nonisolated delegate callbacks.
+    private nonisolated static let category = "HELM_ATTENTION"
+    private nonisolated static let resumeAction = "HELM_RESUME"
 
     init(onResume: @escaping (_ sessionId: String, _ agent: AgentKind, _ cwd: String?) -> Void) {
         self.onResume = onResume
