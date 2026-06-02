@@ -87,6 +87,9 @@ Config path: `~/.config/helm/config.json`. Missing/malformed config falls back t
 - Per-second live refresh must stay cheap: read only the live registry and per-idle verdict/tail, not all history, unless a new session appears.
 - Killing a session closes/focuses terminal panes where possible, clears hook state, optimistically marks the row cold, then SIGTERM/SIGKILLs off the main thread.
 - Notifications fire only on a fresh attention crossing (`NotificationPlanner` diffs against the prior verdict) and only while the panel is closed; the first poll after launch primes the baseline silently so a backlog of finished sessions doesn't burst. A separate 5s timer drives this since the panel's own ticker stops when hidden. Tapping a banner (or Resume) jumps into that session.
+  - If you're focused on that session's terminal tab when it crosses (`TerminalDispatcher.isSessionFocused` — terminal frontmost + its active tab owns the session pid's tty), Helm plays a chime instead of a banner. Otherwise it posts the full banner + sound.
+  - When a session leaves attention (you responded → `running`, or it ended), `NotificationPlanner` reports it in `plan.cleared` and the delivered banner is removed (`removeDeliveredNotifications`), so a handled banner doesn't linger.
+  - Notifications post at `.active` level, not `.timeSensitive`: the latter needs an entitlement a local build can't carry and is silently dropped without it.
 
 ### Tasks view
 

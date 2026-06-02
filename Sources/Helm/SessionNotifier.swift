@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import UserNotifications
 import HelmCore
@@ -47,15 +48,31 @@ final class SessionNotifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    /// Diff `rows` against the baseline and post for fresh attention crossings. `panelVisible`
-    /// gates posting (not baseline tracking) so banners never compete with the open overlay.
+    /// Diff `rows` against the baseline: clear banners for sessions that left attention
+    /// (you responded, or it ended), and handle fresh crossings. `panelVisible` gates output
+    /// (not baseline tracking) so nothing competes with the open overlay. Per crossing: if
+    /// you're focused on that session's terminal tab, a chime is enough — skip the banner;
+    /// otherwise post the full notification (banner + sound).
     func reconcile(_ rows: [ChatSession], panelVisible: Bool) {
         guard HelmConfig.load().notificationsEnabled else { return }
-        let (notifications, state) = NotificationPlanner.plan(previous: baseline, rows: rows)
-        baseline = state
+        let plan = NotificationPlanner.plan(previous: baseline, rows: rows)
+        baseline = plan.state
+        if !plan.cleared.isEmpty {
+            center.removeDeliveredNotifications(withIdentifiers: plan.cleared)
+        }
         guard primed else { primed = true; return }   // first pass primes silently
-        guard !panelVisible else { return }            // you're already looking
-        notifications.forEach(post)
+        guard !panelVisible else { return }            // you're in Helm; the row updates there
+        for n in plan.notifications {
+            if TerminalDispatcher.isSessionFocused(pid: n.pid) { playChime() }
+            else { post(n) }
+        }
+    }
+
+    /// A short chime for a crossing on the tab you're already watching — a nudge without a
+    /// banner. Falls back to the system beep if the named sound isn't available.
+    private func playChime() {
+        if let sound = NSSound(named: "Ping") ?? NSSound(named: "Funk") { sound.play() }
+        else { NSSound.beep() }
     }
 
     private func post(_ n: SessionNotification) {

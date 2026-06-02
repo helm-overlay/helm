@@ -33,6 +33,35 @@ enum TerminalDispatcher {
         }
     }
 
+    /// Whether `pid`'s session is the one you're currently looking at: the configured
+    /// terminal is frontmost AND its active tab/session owns `pid`'s controlling tty. Used to
+    /// suppress a notification for a session you're already watching. Returns false on any
+    /// uncertainty (no tty, terminal not running, AppleScript error) so we'd rather notify
+    /// than wrongly stay silent. The `is running` guard keeps this from launching the
+    /// terminal just to ask.
+    static func isSessionFocused(pid: Int32?) -> Bool {
+        guard let pid, let tty = ttyForPID(pid) else { return false }
+        let app = HelmConfig.load().terminal.appName
+        let activeTTY: String
+        switch HelmConfig.load().terminal {
+        case .iterm:    activeTTY = "tty of current session of current window"
+        case .terminal: activeTTY = "tty of selected tab of front window"
+        }
+        let script = """
+        if application \(appleScriptString(app)) is running then
+            tell application \(appleScriptString(app))
+                if not frontmost then return "0"
+                if (count of windows) = 0 then return "0"
+                try
+                    if (\(activeTTY)) is \(appleScriptString(tty)) then return "1"
+                end try
+            end tell
+        end if
+        return "0"
+        """
+        return runAppleScript(script) == "1"
+    }
+
     /// Close the terminal pane whose session owns `pid`'s controlling tty. No-op for a
     /// process with no tty (e.g. a background session). Resolve the tty before the caller
     /// kills the process, or `ps` will have nothing to report.
