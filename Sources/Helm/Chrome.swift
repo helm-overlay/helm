@@ -25,6 +25,8 @@ struct HintBar: View {
         }
         .font(.system(size: 11))
         .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
     }
 }
 
@@ -38,12 +40,14 @@ struct ModeSwitcher: View {
         HStack(spacing: 4) {
             ForEach(AppView.allCases, id: \.self) { view in
                 let active = shell.view == view
-                Button { shell.view = view } label: {
+                Button { shell.select(view) } label: {
                     HStack(spacing: 4) {
                         Image(systemName: view.symbol).font(.system(size: 10, weight: .semibold))
                         Text(view.title).font(.system(size: 11, weight: active ? .semibold : .regular))
-                        Text("⌘\(view.shortcutDigit)").font(.system(size: 9)).foregroundStyle(.tertiary)
+                        Text(verbatim: "⌘\(view.shortcutDigit)").font(.system(size: 9)).foregroundStyle(.tertiary)
                     }
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .foregroundStyle(active ? .primary : .secondary)
                     .padding(.horizontal, 7).padding(.vertical, 2)
                     .background(active ? Color.white.opacity(0.12) : .clear, in: Capsule())

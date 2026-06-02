@@ -1,6 +1,7 @@
 import Cocoa
 import SwiftUI
 import Carbon.HIToolbox
+import Combine
 import HelmCore
 
 /// Reap dead sessions' state files off the main thread (pure filesystem work, no UI).
@@ -12,6 +13,7 @@ private func reapDeadState() {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: OverlayPanel!
     private let shell = AppShellModel()
+    private let attentionModel = AttentionListViewModel()
     private let model = SessionListViewModel()
     private let tasksModel = TaskListViewModel()
     private let prsModel = PRListViewModel()
@@ -21,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var reaper: Timer?
     private var notifyTimer: Timer?
     private var notifier: SessionNotifier!
+    private var cancellables = Set<AnyCancellable>()
 
     /// Last session the jump hotkey landed on, so repeated presses cycle through the
     /// sessions wanting attention rather than re-opening the same one.
@@ -41,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let root = RootView(
             shell: shell,
+            attention: attentionModel,
             sessions: model,
             tasks: tasksModel,
             prs: prsModel,
@@ -50,6 +54,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onCycleTask:         { [weak self] in self?.tasksModel.cycleSelected() },
             onOpenSource:        { [weak self] in self?.openSource($0) },
             onOpenPR:            { [weak self] in self?.openPR($0) },
+            onOpenAttention:     { [weak self] in self?.openAttentionItem($0) },
+            onResize:            { [weak self] in self?.resizePanel(for: $0) },
             onDismiss:           { [weak self] in self?.hide() })
         panel = OverlayPanel(content: NSHostingView(rootView: root))
         NotificationCenter.default.addObserver(
@@ -57,6 +63,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.hide() }
         }
+
+        // View-switch resizing is driven by RootView (onResize), timed to the slide's gap.
+        // Here we only react to the launcher's content count changing while it's shown, so
+        // the panel keeps fitting its rows.
+        attentionModel.$sessions
+            .combineLatest(attentionModel.$attentionPRs)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, self.panel.isVisible, self.shell.view == .attention else { return }
+                self.resizePanel(for: .attention)
+            }
+            .store(in: &cancellables)
 
         hotKey = GlobalHotKey(keyCode: hotKeyCode, modifiers: hotKeyMods, id: 1) { [weak self] in
             self?.toggle()
@@ -76,6 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.reloadInBackground(animated: false) // warm caches so the first summon is instant
         tasksModel.reloadInBackground()
         prsModel.reloadInBackground()
+        attentionModel.reloadInBackground()
         startReaping()
         startNotifying()
     }
@@ -126,14 +145,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func toggle() { panel.isVisible ? hide() : show() }
 
+    /// Size the panel for a view: compact (fit-to-content) for the attention launcher,
+    /// generous for everything else. Instant — the slide masks the size change.
+    private func resizePanel(for view: AppView) {
+        if view == .attention {
+            panel.setLauncherFrame(contentHeight: attentionContentHeight())
+        } else {
+            panel.setGenerousFrame()
+        }
+    }
+
+    /// Estimated height of the launcher's content — header + footer + its visible rows and
+    /// section headers. Approximate (matches the SwiftUI row metrics); the list scrolls if
+    /// it's off, so it never clips.
+    private func attentionContentHeight() -> CGFloat {
+        let header: CGFloat = 46, footer: CGFloat = 40, dividers: CGFloat = 2, listVPad: CGFloat = 12
+        let rowHeight: CGFloat = 33, sectionHeight: CGFloat = 24
+        let rows = max(1, attentionModel.visibleRowCount)         // ≥1 for the empty-state line
+        return header + footer + dividers + listVPad
+            + CGFloat(attentionModel.visibleSectionCount) * sectionHeight
+            + CGFloat(rows) * rowHeight
+    }
+
     private func show() {
-        shell.view = .sessions            // each summon starts on sessions (the primary use)
-        panel.positionUpperMiddle()
+        shell.snap(to: .attention)        // each summon snaps to the launcher (no slide)
+        resizePanel(for: .attention)      // size before it's visible
         panel.makeKeyAndOrderFront(nil)
         installKeyMonitor()
+        attentionModel.startTicking()
         model.startTicking()
         tasksModel.startTicking()
         prsModel.startTicking()
+        attentionModel.reloadInBackground()
         model.reloadInBackground(animated: false)
         model.resetNav()                  // each summon begins focused on the LIVE rail
         tasksModel.reloadInBackground()
@@ -142,6 +185,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func hide() {
         removeKeyMonitor()
+        attentionModel.stopTicking()
         model.stopTicking()
         tasksModel.stopTicking()
         prsModel.stopTicking()
@@ -185,6 +229,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let s = model.selectedSession, let pid = s.pid else { return }
         TerminalDispatcher.closePane(pid: pid)
         model.kill(s, pid: pid)
+    }
+
+    /// ⌘X in the launcher: kill the selected session row. Beeps for a non-session row (a PR
+    /// can't be killed) so the keystroke gives feedback either way.
+    private func killSelectedAttention() {
+        guard let session = attentionModel.selectedItem as? ChatSession, let pid = session.pid else {
+            NSSound.beep(); return
+        }
+        TerminalDispatcher.closePane(pid: pid)
+        attentionModel.kill(session)
     }
 
     private func addWorkspaceFolders() {
@@ -260,6 +314,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.open(url)
     }
 
+    /// Open an attention-launcher row by its concrete type — resume a session, open a PR.
+    private func openAttentionItem(_ item: any AttentionItem) {
+        if let session = item as? ChatSession { pick(session) }
+        else if let pr = item as? PullRequest { openPR(pr) }
+    }
+
     // MARK: Key handling (local monitor while visible)
 
     private func installKeyMonitor() {
@@ -284,15 +344,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Global to every view; a new AppView case is reachable here with no edit.
         if cmd {
             if let digit = Self.digitKeyCodes[Int(event.keyCode)], let view = AppView.forDigit(digit) {
-                shell.view = view; return true
+                shell.select(view); return true
             }
             if Int(event.keyCode) == kVK_ANSI_O { addWorkspaceFolders(); return true }
         }
         switch shell.view {
-        case .sessions: return handleSessions(event, cmd: cmd, option: option)
-        case .tasks:    return handleTasks(event, cmd: cmd, option: option)
-        case .prs:      return handlePRs(event, cmd: cmd, option: option)
+        case .attention: return handleAttention(event, cmd: cmd, option: option)
+        case .sessions:  return handleSessions(event, cmd: cmd, option: option)
+        case .tasks:     return handleTasks(event, cmd: cmd, option: option)
+        case .prs:       return handlePRs(event, cmd: cmd, option: option)
         }
+    }
+
+    private func handleAttention(_ event: NSEvent, cmd: Bool, option: Bool) -> Bool {
+        switch Int(event.keyCode) {
+        case kVK_Escape:                                            hide(); return true
+        case kVK_Return, kVK_ANSI_KeypadEnter:
+            if let item = attentionModel.selectedItem { openAttentionItem(item) }
+            return true
+        case kVK_DownArrow:   attentionModel.clearSelection(); attentionModel.move(by: 1);  return true
+        case kVK_UpArrow:     attentionModel.clearSelection(); attentionModel.move(by: -1); return true
+        case kVK_ANSI_A where cmd: attentionModel.selectAllQuery();  return true
+        case kVK_ANSI_X where cmd: killSelectedAttention();         return true
+        case kVK_Delete:
+            if cmd        { attentionModel.clearQuery() }
+            else if option { attentionModel.deleteWordBack() }
+            else           { attentionModel.backspaceQuery() }
+            return true
+        default: break
+        }
+        return appendIfPrintable(event, cmd: cmd, to: { [weak self] in self?.attentionModel.appendQuery($0) })
     }
 
     private func handleSessions(_ event: NSEvent, cmd: Bool, option: Bool) -> Bool {

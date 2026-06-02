@@ -333,7 +333,7 @@ private struct SessionRow: View {
 /// letting the lone amber knock break from it and grab the eye. All motion is driven by
 /// per-row `TimelineView(.animation)` (display-link, self-pausing when offscreen) rather
 /// than a per-row timer, so an idle field of rows costs nothing to keep on screen.
-private struct OrbitIndicator: View {
+struct OrbitIndicator: View {
     let state: SessionState
     var needsInput: Bool = false
     var suppressAnimations: Bool = false
