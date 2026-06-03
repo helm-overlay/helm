@@ -20,7 +20,7 @@ public enum PiExtensionInstaller {
     static let extensionSource = #"""
 import { complete, type UserMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -84,6 +84,17 @@ function getSessionInfo(ctx: any) {
 }
 
 type StateReason = "running" | "needs_input" | "done";
+
+function clearStateForSessionId(sessionId: string | undefined) {
+  if (!sessionId) return;
+  try {
+    unlinkSync(join(stateDir, `${sessionId}.json`));
+  } catch {}
+}
+
+function clearStateForSessionFile(sessionFile: string | undefined) {
+  clearStateForSessionId(sessionIdFromFile(sessionFile));
+}
 
 function writeState(ctx: any, reason: StateReason, nameOverride?: string) {
   const info = getSessionInfo(ctx);
@@ -222,7 +233,11 @@ function writeIdleState(ctx: any, reason: IdleReason) {
 }
 
 export default function helm(pi: ExtensionAPI) {
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
+    if ((event as any).reason === "new" || (event as any).reason === "resume" || (event as any).reason === "fork") {
+      lastNameOverride = undefined;
+      clearStateForSessionFile((event as any).previousSessionFile);
+    }
     writeState(ctx, ctx.isIdle?.() ? "done" : "running");
   });
 
@@ -259,7 +274,10 @@ export default function helm(pi: ExtensionAPI) {
     writeIdleState(ctx, reason);
   });
 
-  pi.on("session_shutdown", async () => {});
+  pi.on("session_shutdown", async (event, ctx) => {
+    if ((event as any).reason === "reload") return;
+    clearStateForSessionId(getSessionInfo(ctx).sessionId);
+  });
 }
 
 """#
