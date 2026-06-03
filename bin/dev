@@ -21,12 +21,23 @@ ensure_project() {
   fi
 }
 
+install_cli() {
+  local config=${1:-Debug}
+  xcodebuild -project Helm.xcodeproj -target HelmCLI \
+             -configuration "$config" -quiet \
+             ARCHS=arm64 ONLY_ACTIVE_ARCH=YES
+  mkdir -p "$HOME/.local/bin"
+  ln -sf "$here/build/$config/helm" "$HOME/.local/bin/helm"
+  echo "helm CLI linked: $HOME/.local/bin/helm -> $here/build/$config/helm"
+}
+
 case "${1:-}" in
   app)
     ensure_project
     xcodebuild -project Helm.xcodeproj -target Helm \
                -configuration Debug -quiet \
                ARCHS=arm64 ONLY_ACTIVE_ARCH=YES
+    install_cli Debug
     echo "Helm.app at: $here/build/Debug/Helm.app"
     echo "Launch with: open ./build/Debug/Helm.app"
     ;;
@@ -34,6 +45,7 @@ case "${1:-}" in
     ensure_project
     xcodebuild -project Helm.xcodeproj -target Helm \
                -configuration Release -quiet
+    install_cli Release
     rm -rf /Applications/Helm.app
     cp -R ./build/Release/Helm.app /Applications/
     echo "shipped: /Applications/Helm.app"
@@ -49,6 +61,7 @@ case "${1:-}" in
                -destination 'platform=macOS' test
     xcodebuild -project Helm.xcodeproj -scheme Helm \
                -configuration Debug build
+    install_cli Debug
     ;;
   *)
     echo "usage: bin/dev {app|ship|test|check}" >&2
