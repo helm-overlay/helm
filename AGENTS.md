@@ -4,9 +4,9 @@ Guidance for agents working in this repository.
 
 ## What Helm is
 
-Helm is a macOS Swift app for managing agent/Claude Code sessions.
+Helm is a macOS Swift app for managing coding-agent sessions (currently Claude Code and Pi).
 
-The main app is a non-activating `NSPanel` overlay summoned by global hotkeys. Its primary view lists Claude sessions grouped by project, classifies live idle sessions by whether they need user input vs review, and opens/resumes chats in the configured terminal. A secondary view lists tasks from a local markdown task vault.
+The main app is a non-activating `NSPanel` overlay summoned by global hotkeys. Its primary view lists agent sessions grouped by project, classifies live idle sessions by whether they need user input vs review, and opens/resumes chats in the configured terminal. A secondary view lists tasks from a local markdown task vault.
 
 Project/worktree management is NOT Helm's job — that lives in a standalone Python `project` CLI (`~/Home/dev/utils/projects-cli/`, symlinked at `~/.local/bin/project`). Helm is the session overlay only.
 
@@ -14,7 +14,7 @@ Project/worktree management is NOT Helm's job — that lives in a standalone Pyt
 
 - `project.yml` — XcodeGen source of truth. `Helm.xcodeproj` is generated and gitignored.
 - `Sources/HelmCore/` — testable data/model layer.
-  - `SessionStore.swift` joins live Claude registry files with transcript history, groups/sorts sessions, classifies idle tails, reaps stale hook state, and exposes live-only refresh logic.
+  - `SessionStore.swift` joins per-agent live registry/state files with transcript history, groups/sorts sessions, classifies idle tails, reaps stale hook state, and exposes live-only refresh logic.
   - `Models.swift` defines `ChatSession`, `LiveRecord`, `HistoryRecord`, session/idle states, and placeholder rows.
   - `TaskStore.swift`, `TaskModels.swift`, `TaskMutator.swift` read and mutate the markdown task vault.
   - `HelmConfig.swift` loads `~/.config/helm/config.json`.
@@ -28,26 +28,31 @@ Project/worktree management is NOT Helm's job — that lives in a standalone Pyt
   - `SessionNotifier.swift` posts a macOS notification when a session crosses into an attention state while the panel is closed (transition detection is `HelmCore.NotificationPlanner`).
   - `OverlayPanel.swift`, `GlobalHotKey.swift`, `Components.swift` are UI/platform helpers.
 - `Sources/HelmProbe/` — CLI that prints the merged session tree for debugging.
+- `Sources/HelmCLI/` — `helm` setup CLI. `helm init pi` / `helm init claude` install external harness plugins from GitHub.
 - `Tests/HelmCoreTests/` — unit tests for pure core logic and temp-filesystem readers.
-- `bin/dev` — local dev helper for rebuilding and testing the app.
+- `bin/dev` — local dev helper for rebuilding/testing the app; `app`, `ship`, and `check` also build `HelmCLI` and symlink `~/.local/bin/helm`.
 
 ## External data and state
 
 Session manager inputs:
 
-- Live sessions: `~/.claude/sessions/<pid>.json`
+- Claude live sessions: `~/.claude/sessions/<pid>.json`
   - Records include `pid`, `sessionId`, `status`, `kind`, `name`, and `entrypoint`.
-  - `SessionStore.readLive()` keeps only alive PIDs (`kill(pid, 0)`) and user threads (`entrypoint == nil || entrypoint == "cli"`).
-- History: `~/.claude/projects/*/<sessionId>.jsonl`
+  - `ClaudeSessionBackend` keeps only alive PIDs (`kill(pid, 0)`) and user threads (`entrypoint == nil || entrypoint == "cli"`).
+- Claude history: `~/.claude/projects/*/<sessionId>.jsonl`
   - Filename is the `sessionId`.
   - Helm reads transcript heads for `cwd`, `gitBranch`, `aiTitle`, `entrypoint`, and mtime.
   - `agent-*.jsonl` subagent transcripts and SDK/hook-created sessions are filtered out.
-- Hook run/attention state: `~/.helm/state/<sessionId>.json`
+- Claude hook run/attention state: `~/.helm/claude/state/<sessionId>.json`
   - Wire shape `{"reason","sessionId","ts","summary"}`. `reason` values: `needs_input`, `done` (→ `needsReview`), and `running` (working; reads as no attention verdict). Unknown/`running` → falls through to the live registry + tail heuristics.
   - `summary` is the Stop classifier's one-line "what happened", surfaced as the notification body (`ChatSession.attentionSummary`). The bash handlers (`running`/mid-turn `needs_input`) omit it.
   - Authoritative for **any** live row, not just idle ones: a `needs_input`/`done` verdict promotes even a busy row to an attention row (`SessionStore.resolveLiveRow`). That's how a mid-turn AskUserQuestion surfaces while the registry still says busy.
-  - Written by the `helm` Claude plugin (install with `helm init claude` — see `ClaudeHooksPlugin`), which owns SessionStart/UserPromptSubmit/PreToolUse(AskUserQuestion)/PostToolUse(AskUserQuestion)/Stop/SessionEnd. The Stop verdict is still a Haiku agent hook.
-  - The app reaps files whose sessions are no longer alive every 2 minutes and clears a file when it kills a session itself.
+  - Installed by `helm init claude`, which shells out to Claude's plugin installer for `github.com/helm-overlay/claude-plugin`. The plugin owns SessionStart/UserPromptSubmit/PreToolUse(AskUserQuestion)/PostToolUse(AskUserQuestion)/Stop/SessionEnd. The Stop verdict is still a Haiku agent hook.
+- Pi history/state:
+  - History comes from Pi's session files under `~/.pi/agent/sessions/`.
+  - Live/run/attention state is written to `~/.helm/pi/state/<sessionId>.json` by the Pi package installed with `helm init pi` (`pi install git:github.com/helm-overlay/pi-plugin`).
+  - Pi state includes liveness metadata such as `pid`, `sessionFile`, `cwd`, `status`, `name`, and `entrypoint` when available.
+- The app reaps stale state whose sessions are no longer alive every 2 minutes and clears a file when it kills a session itself.
 
 Task manager inputs:
 
@@ -121,10 +126,10 @@ xcodebuild -project Helm.xcodeproj -scheme HelmCore \
 Dev helper:
 
 ```sh
-bin/dev app    # generate project, build Debug Helm.app
-bin/dev ship   # generate project, Release build, copy to /Applications
+bin/dev app    # generate project, build Debug Helm.app, build/link ~/.local/bin/helm
+bin/dev ship   # generate project, Release build, copy to /Applications, build/link ~/.local/bin/helm
 bin/dev test   # generate project and run HelmCore tests
-bin/dev check  # generate project, run tests, and build Debug Helm.app
+bin/dev check  # generate project, run tests, build Debug Helm.app, build/link ~/.local/bin/helm
 ```
 
 ## Testing expectations
@@ -142,3 +147,4 @@ bin/dev check  # generate project, run tests, and build Debug Helm.app
 - `NSPanel` is non-activating/LSUIElement. Some normal menu/responder behavior is absent.
 - `TerminalDispatcher` uses AppleScript and TTY matching. Be careful with shell quoting and AppleScript string escaping.
 - Do not commit generated `Helm.xcodeproj`, `build/`, or `DerivedData/`.
+- The main repo is `github.com/helm-overlay/helm` (`helm-bootstrap` is the default branch). External plugin repos are `github.com/helm-overlay/pi-plugin` and `github.com/helm-overlay/claude-plugin`; update those repos when changing plugin source, not Swift string literals.
