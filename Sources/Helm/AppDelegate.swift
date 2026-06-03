@@ -74,7 +74,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .combineLatest(attentionModel.$attentionPRs)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                guard let self, self.panel.isVisible, self.shell.view == .attention else { return }
+                guard let self, self.panel.isVisible, self.shell.view == .attention,
+                      !self.shell.newChatActive else { return }   // picker owns the frame while it's up
                 self.resizePanel(for: .attention)
             }
             .store(in: &cancellables)
