@@ -28,7 +28,7 @@ Project/worktree management is NOT Helm's job — that lives in a standalone Pyt
   - `SessionNotifier.swift` posts a macOS notification when a session crosses into an attention state while the panel is closed (transition detection is `HelmCore.NotificationPlanner`).
   - `OverlayPanel.swift`, `GlobalHotKey.swift`, `Components.swift` are UI/platform helpers.
 - `Sources/HelmProbe/` — CLI that prints the merged session tree for debugging.
-- `Sources/HelmCLI/` — `helm` setup CLI. `helm init pi` / `helm init claude` install external harness plugins from GitHub.
+- `Sources/HelmCLI/` — `helm` setup CLI. `helm init pi` installs the Pi package via `pi install`; `helm init claude` clones the external Claude plugin repo into `~/.claude/skills/helm` so Claude auto-loads it.
 - `Tests/HelmCoreTests/` — unit tests for pure core logic and temp-filesystem readers.
 - `bin/dev` — local dev helper for rebuilding/testing the app; `app`, `ship`, and `check` also build `HelmCLI` and symlink `~/.local/bin/helm`.
 
@@ -47,7 +47,7 @@ Session manager inputs:
   - Wire shape `{"reason","sessionId","ts","summary"}`. `reason` values: `needs_input`, `done` (→ `needsReview`), and `running` (working; reads as no attention verdict). Unknown/`running` → falls through to the live registry + tail heuristics.
   - `summary` is the Stop classifier's one-line "what happened", surfaced as the notification body (`ChatSession.attentionSummary`). The bash handlers (`running`/mid-turn `needs_input`) omit it.
   - Authoritative for **any** live row, not just idle ones: a `needs_input`/`done` verdict promotes even a busy row to an attention row (`SessionStore.resolveLiveRow`). That's how a mid-turn AskUserQuestion surfaces while the registry still says busy.
-  - Installed by `helm init claude`, which shells out to Claude's plugin installer for `github.com/helm-overlay/claude-plugin`. The plugin owns SessionStart/UserPromptSubmit/PreToolUse(AskUserQuestion)/PostToolUse(AskUserQuestion)/Stop/SessionEnd. The Stop verdict is still a Haiku agent hook.
+  - Installed by `helm init claude`, which clones `https://github.com/helm-overlay/claude-plugin.git` into `~/.claude/skills/helm` (Claude Code 2.1.157+ auto-loads plugins from `.claude/skills`; `claude plugin install` is only for marketplaces). The plugin owns SessionStart/UserPromptSubmit/PreToolUse(AskUserQuestion)/PostToolUse(AskUserQuestion)/Stop/SessionEnd. The Stop verdict is still a Haiku agent hook.
 - Pi history/state:
   - History comes from Pi's session files under `~/.pi/agent/sessions/`.
   - Live/run/attention state is written to `~/.helm/pi/state/<sessionId>.json` by the Pi package installed with `helm init pi` (`pi install git:github.com/helm-overlay/pi-plugin`).

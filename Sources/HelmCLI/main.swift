@@ -60,21 +60,25 @@ func runInit(_ rest: [String]) {
 }
 
 let piPluginSource = "git:github.com/helm-overlay/pi-plugin"
-let claudePluginSource = "github.com/helm-overlay/claude-plugin"
+let claudePluginSource = "https://github.com/helm-overlay/claude-plugin.git"
 
 func installClaude(home: String) {
     guard home == NSHomeDirectory() else {
         fail("helm init claude: --home is not supported when installing external plugins")
     }
 
-    let result = runCommand("claude", ["plugin", "install", claudePluginSource])
+    let pluginDir = URL(fileURLWithPath: home).appendingPathComponent(".claude/skills/helm")
+    try? FileManager.default.createDirectory(at: pluginDir.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try? FileManager.default.removeItem(at: pluginDir)
+
+    let result = runCommand("git", ["clone", "--depth", "1", claudePluginSource, pluginDir.path])
     guard result.ok else {
         fail("""
-        helm init claude: `claude plugin install \(claudePluginSource)` failed.
+        helm init claude: could not clone \(claudePluginSource) into \(pluginDir.path).
         \(result.output)
 
-        If your Claude Code CLI does not support plugin installs yet, install manually from:
-        https://github.com/helm-overlay/claude-plugin
+        Install manually with:
+        git clone --depth 1 \(claudePluginSource) \(pluginDir.path)
         """)
     }
 
@@ -83,11 +87,12 @@ func installClaude(home: String) {
     let settings = URL(fileURLWithPath: home).appendingPathComponent(".claude/settings.json")
 
     print("✓ Installed the Helm Claude plugin")
+    print("  plugin:     \(pluginDir.path)")
     print("  source:     \(claudePluginSource)")
     print("  hooks:      SessionStart · UserPromptSubmit · PreToolUse(AskUserQuestion) · PostToolUse(AskUserQuestion) · Stop · SessionEnd")
     print("  writes:     \(stateDir.path)/<sessionId>.json")
     print("")
-    print("→ Restart Claude Code (or start a new session) so the plugin loads.")
+    print("→ Restart Claude Code (or start a new session) so it auto-loads from ~/.claude/skills/helm.")
 
     if ClaudePluginInstaller.settingsReferencesHelmState(settings) {
         print("")
