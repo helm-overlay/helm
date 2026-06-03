@@ -94,7 +94,7 @@ func installClaude(home: String) {
     print("")
     print("→ Restart Claude Code (or start a new session) so it auto-loads from ~/.claude/skills/helm.")
 
-    if ClaudePluginInstaller.settingsReferencesHelmState(settings) {
+    if settingsReferencesHelmState(settings) {
         print("")
         print("⚠ \(settings.path) still has hand-rolled hooks writing ~/.helm/claude/state.")
         print("  Remove those entries so the classifier doesn't run twice per turn.")
@@ -126,6 +126,11 @@ func installPi(home: String) {
     print("  writes:     \(stateDir.path)/<sessionId>.json")
     print("")
     print("→ Restart Pi (or start a new session) so the extension reloads.")
+}
+
+func settingsReferencesHelmState(_ url: URL) -> Bool {
+    guard let text = try? String(contentsOf: url, encoding: .utf8) else { return false }
+    return text.contains(".helm/claude/state")
 }
 
 func runCommand(_ executable: String, _ arguments: [String]) -> (ok: Bool, output: String) {
