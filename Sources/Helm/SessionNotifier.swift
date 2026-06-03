@@ -19,6 +19,7 @@ import HelmCore
 final class SessionNotifier: NSObject, UNUserNotificationCenterDelegate {
     private let center = UNUserNotificationCenter.current()
     private let onResume: (_ sessionId: String, _ agent: AgentKind, _ cwd: String?) -> Void
+    private let chimeSound = NSSound(named: "Ping") ?? NSSound(named: "Funk")
 
     /// Last attention verdict we saw per session id — the planner's carry-forward state.
     private var baseline: [String: IdleReason] = [:]
@@ -71,8 +72,14 @@ final class SessionNotifier: NSObject, UNUserNotificationCenterDelegate {
     /// A short chime for a crossing on the tab you're already watching — a nudge without a
     /// banner. Falls back to the system beep if the named sound isn't available.
     private func playChime() {
-        if let sound = NSSound(named: "Ping") ?? NSSound(named: "Funk") { sound.play() }
-        else { NSSound.beep() }
+        guard let chimeSound else {
+            NSSound.beep()
+            return
+        }
+        chimeSound.stop()
+        if !chimeSound.play() {
+            NSSound.beep()
+        }
     }
 
     private func post(_ n: SessionNotification) {
