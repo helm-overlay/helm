@@ -1,7 +1,7 @@
 import Foundation
 
 /// Generates and installs the **`helm` Claude Code plugin** — the set of hooks that keep
-/// `~/.helm/state/<sessionId>.json` current so the overlay knows which sessions want you.
+/// `~/.helm/claude/state/<sessionId>.json` current so the overlay knows which sessions want you.
 ///
 /// Since Claude Code 2.1.157, a plugin dropped in `~/.claude/skills/<name>/` auto-loads
 /// next session with no marketplace — so `helm init claude` just writes the plugin there.
@@ -61,7 +61,7 @@ public enum ClaudeHooksPlugin {
             "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
             "name": pluginName,
             "version": "0.2.0",
-            "description": "Helm session-state hooks — write attention/run state to ~/.helm/state for the Helm overlay.",
+            "description": "Helm session-state hooks — write attention/run state to ~/.helm/claude/state for the Helm overlay.",
         ]
         if let author {
             obj["author"] = ["name": author.name, "email": author.email]
@@ -144,7 +144,7 @@ public enum ClaudeHooksPlugin {
     event="$(cat)"
     sid="$(printf '%s' "$event" | jq -r '.session_id // empty')"
     [ -n "$sid" ] || exit 0
-    dir="$HOME/.helm/state"
+    dir="$HOME/.helm/claude/state"
     mkdir -p "$dir"
     printf '{"reason":"%s","sessionId":"%s","ts":%s}\\n' "$reason" "$sid" "$(date +%s)" > "$dir/$sid.json"
 
@@ -157,7 +157,7 @@ public enum ClaudeHooksPlugin {
     event="$(cat)"
     sid="$(printf '%s' "$event" | jq -r '.session_id // empty')"
     [ -n "$sid" ] || exit 0
-    rm -f "$HOME/.helm/state/$sid.json"
+    rm -f "$HOME/.helm/claude/state/$sid.json"
 
     """
 

@@ -56,7 +56,7 @@ final class ClaudeSessionBackendTests: XCTestCase {
         defer { try? fm.removeItem(at: home) }
         let sessions = home.appendingPathComponent(".claude/sessions")
         let projects = home.appendingPathComponent(".claude/projects/proj")
-        let stateDir = home.appendingPathComponent(".helm/state")
+        let stateDir = home.appendingPathComponent(".helm/claude/state")
         try fm.createDirectory(at: sessions, withIntermediateDirectories: true)
         try fm.createDirectory(at: projects, withIntermediateDirectories: true)
         try fm.createDirectory(at: stateDir, withIntermediateDirectories: true)

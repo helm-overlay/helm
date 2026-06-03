@@ -6,15 +6,15 @@ public enum ClaudePluginInstaller {
         public let pluginDir: String
         public let filesWritten: [String]
         public let stateDir: String
-        /// True when `~/.claude/settings.json` already wires hooks at `~/.helm/state` — the
-        /// hand-rolled set the plugin now supersedes, which the user should remove so the
-        /// classifier doesn't run twice per Stop.
+        /// True when `~/.claude/settings.json` already wires hooks at `~/.helm/claude/state` —
+        /// the hand-rolled set the plugin now supersedes, which the user should remove so
+        /// the classifier doesn't run twice per Stop.
         public let legacyHooksInSettings: Bool
         public let settingsPath: String
     }
 
     /// Materialize the plugin under `~/.claude/skills/helm`, (re)writing every file so a
-    /// re-run picks up template changes. Also ensures `~/.helm/state` exists.
+    /// re-run picks up template changes. Also ensures `~/.helm/claude/state` exists.
     @discardableResult
     public static func install(home: String = NSHomeDirectory(),
                                author: (name: String, email: String)? = nil) throws -> Report {
@@ -45,10 +45,10 @@ public enum ClaudePluginInstaller {
             settingsPath: settings.path)
     }
 
-    /// Cheap detection: does `settings.json` mention the Helm state dir at all? A substring
-    /// check is enough to decide whether to print the cleanup note — we never edit the file.
+    /// Cheap detection: does `settings.json` mention the Helm Claude state dir at all? A
+    /// substring check is enough to decide whether to print the cleanup note — we never edit the file.
     static func settingsReferencesHelmState(_ url: URL) -> Bool {
         guard let text = try? String(contentsOf: url, encoding: .utf8) else { return false }
-        return text.contains(".helm/state")
+        return text.contains(".helm/claude/state")
     }
 }

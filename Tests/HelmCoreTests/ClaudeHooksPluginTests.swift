@@ -47,7 +47,7 @@ final class ClaudeHooksPluginTests: XCTestCase {
     // MARK: plugin payload
 
     func testHooksJSONHasFullLifecycleAndAskMatcher() throws {
-        let json = ClaudeHooksPlugin.hooksJSON(stateDir: "/Users/me/.helm/state")
+        let json = ClaudeHooksPlugin.hooksJSON(stateDir: "/Users/me/.helm/claude/state")
         let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         let hooks = try XCTUnwrap(obj["hooks"] as? [String: Any])
 
@@ -66,7 +66,7 @@ final class ClaudeHooksPluginTests: XCTestCase {
         let stop = try XCTUnwrap(((hooks["Stop"] as? [[String: Any]])?.first?["hooks"] as? [[String: Any]])?.first)
         XCTAssertEqual(stop["type"] as? String, "agent")
         XCTAssertEqual(stop["model"] as? String, "claude-haiku-4-5-20251001")
-        XCTAssertTrue((stop["prompt"] as? String ?? "").contains("/Users/me/.helm/state/<session_id>.json"))
+        XCTAssertTrue((stop["prompt"] as? String ?? "").contains("/Users/me/.helm/claude/state/<session_id>.json"))
     }
 
     func testManifestIsValidJSONWithName() throws {
@@ -86,7 +86,7 @@ final class ClaudeHooksPluginTests: XCTestCase {
         let plugin = home.appendingPathComponent(".claude/skills/helm")
         XCTAssertTrue(fm.fileExists(atPath: plugin.appendingPathComponent("hooks/hooks.json").path))
         XCTAssertTrue(fm.fileExists(atPath: plugin.appendingPathComponent(".claude-plugin/plugin.json").path))
-        XCTAssertTrue(fm.fileExists(atPath: report.stateDir))   // ~/.helm/state created
+        XCTAssertTrue(fm.fileExists(atPath: report.stateDir))   // ~/.helm/claude/state created
 
         let setState = plugin.appendingPathComponent("hooks-handlers/set-state.sh").path
         let perms = try XCTUnwrap((try fm.attributesOfItem(atPath: setState)[.posixPermissions] as? NSNumber)?.intValue)

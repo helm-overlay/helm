@@ -5,15 +5,12 @@ final class PiSessionBackendTests: XCTestCase {
     func testPiLiveAndIdleStateParsing() throws {
         let home = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("helm-pi-live-\(UUID())")
         defer { try? FileManager.default.removeItem(at: home) }
-        let liveDir = home.appendingPathComponent(".pi/sessions")
         let stateDir = home.appendingPathComponent(".helm/pi/state")
-        try FileManager.default.createDirectory(at: liveDir, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         let pid = Int32(ProcessInfo.processInfo.processIdentifier)
         try """
-        {"pid":\(pid),"sessionId":"pi-live","status":"idle","name":"Live Pi","entrypoint":"cli"}
-        """.write(to: liveDir.appendingPathComponent("\(pid).json"), atomically: true, encoding: .utf8)
-        try #"{"reason":"needs_input"}"#.write(to: stateDir.appendingPathComponent("pi-live.json"), atomically: true, encoding: .utf8)
+        {"pid":\(pid),"sessionId":"pi-live","status":"idle","reason":"needs_input","name":"Live Pi","entrypoint":"cli"}
+        """.write(to: stateDir.appendingPathComponent("pi-live.json"), atomically: true, encoding: .utf8)
 
         let rows = SessionStore(home: home.path, enabledAgents: [.pi],
                                 workspaceFolders: ["/Users/me/projects/demo"]).load()
@@ -28,7 +25,7 @@ final class PiSessionBackendTests: XCTestCase {
     func testClearStateUsesAgentSpecificStateDirectory() throws {
         let home = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("helm-state-clear-\(UUID())")
         defer { try? FileManager.default.removeItem(at: home) }
-        let claudeStateDir = home.appendingPathComponent(".helm/state")
+        let claudeStateDir = home.appendingPathComponent(".helm/claude/state")
         let piStateDir = home.appendingPathComponent(".helm/pi/state")
         try FileManager.default.createDirectory(at: claudeStateDir, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: piStateDir, withIntermediateDirectories: true)
@@ -44,16 +41,13 @@ final class PiSessionBackendTests: XCTestCase {
     func testPiReapsDeadState() throws {
         let home = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("helm-pi-reap-\(UUID())")
         defer { try? FileManager.default.removeItem(at: home) }
-        let liveDir = home.appendingPathComponent(".pi/sessions")
         let stateDir = home.appendingPathComponent(".helm/pi/state")
-        try FileManager.default.createDirectory(at: liveDir, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         let pid = Int32(ProcessInfo.processInfo.processIdentifier)
         try """
-        {"pid":\(pid),"sessionId":"alive","status":"idle","entrypoint":"cli"}
-        """.write(to: liveDir.appendingPathComponent("\(pid).json"), atomically: true, encoding: .utf8)
-        try #"{"reason":"done"}"#.write(to: stateDir.appendingPathComponent("alive.json"), atomically: true, encoding: .utf8)
-        try #"{"reason":"done"}"#.write(to: stateDir.appendingPathComponent("dead.json"), atomically: true, encoding: .utf8)
+        {"pid":\(pid),"sessionId":"alive","status":"idle","reason":"done","entrypoint":"cli"}
+        """.write(to: stateDir.appendingPathComponent("alive.json"), atomically: true, encoding: .utf8)
+        try #"{"pid":999999,"sessionId":"dead","status":"idle","reason":"done","entrypoint":"cli"}"#.write(to: stateDir.appendingPathComponent("dead.json"), atomically: true, encoding: .utf8)
 
         let reaped = SessionStore(home: home.path, enabledAgents: [.pi]).reapDeadState()
         XCTAssertTrue(reaped.contains("pi:dead"))

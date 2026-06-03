@@ -36,7 +36,7 @@ struct PiSessionBackend: SessionBackend {
     }
 
     func aliveSessionIds() -> Set<String>? {
-        let dir = liveDir
+        let dir = Self.stateDir(home: home)
         guard (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) != nil else { return nil }
         return Set(readAliveStateFiles().map(\.sessionId))
     }
@@ -113,7 +113,7 @@ struct PiSessionBackend: SessionBackend {
         return out
     }
 
-    private var liveDir: URL { piDir.appendingPathComponent("sessions") }
+    private var liveDir: URL { Self.stateDir(home: home) }
 
     static func stateDir(home: String) -> URL {
         URL(fileURLWithPath: home).appendingPathComponent(".helm/pi/state")

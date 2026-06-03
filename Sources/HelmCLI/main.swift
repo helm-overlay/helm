@@ -17,9 +17,10 @@ func printUsage() {
 
     Usage:
       helm init claude [--home <dir>]   Install the Claude Code hooks plugin
-      helm init pi                      (not yet) Install the Pi extension
+      helm init pi [--home <dir>]       Install the Pi extension
 
     Run `helm init claude`, then restart Claude Code so the plugin loads.
+    Run `helm init pi`, then restart Pi so the extension reloads.
     """)
 }
 
@@ -52,9 +53,9 @@ func runInit(_ rest: [String]) {
     case "claude":
         installClaude(home: home)
     case "pi":
-        fail("helm init pi: not implemented yet — Pi extension setup is still manual.")
+        installPi(home: home)
     default:
-        fail("helm init: unknown agent '\(agent)'. Supported: claude.")
+        fail("helm init: unknown agent '\(agent)'. Supported: claude, pi.")
     }
 }
 
@@ -76,11 +77,27 @@ func installClaude(home: String) {
 
     if report.legacyHooksInSettings {
         print("")
-        print("⚠ \(report.settingsPath) still has hand-rolled hooks writing ~/.helm/state.")
+        print("⚠ \(report.settingsPath) still has hand-rolled hooks writing ~/.helm/claude/state.")
         print("  The plugin now owns these. Remove the Stop / UserPromptSubmit / SessionEnd")
-        print("  entries that touch ~/.helm/state from settings.json so the classifier")
+        print("  entries that touch ~/.helm/claude/state from settings.json so the classifier")
         print("  doesn't run twice per turn. (Left untouched — edit it yourself.)")
     }
+}
+
+func installPi(home: String) {
+    let report: PiExtensionInstaller.Report
+    do {
+        report = try PiExtensionInstaller.install(home: home)
+    } catch {
+        fail("helm init pi: could not write the extension — \(error.localizedDescription)")
+    }
+
+    print("✓ Installed the Helm Pi extension")
+    print("  extension:  \(report.extensionPath)")
+    print("  hooks:      session_start · before_agent_start · agent_start · agent_end")
+    print("  writes:     \(report.stateDir)/<sessionId>.json")
+    print("")
+    print("→ Restart Pi (or start a new session) so the extension reloads.")
 }
 
 /// Best-effort author stamp for the generated plugin.json. Missing git config → omitted.

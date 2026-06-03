@@ -36,7 +36,7 @@ public struct SessionStore {
     // MARK: Public API
 
     /// Full merged list, ready to display. Every live row is resolved against its hook
-    /// state file (`~/.helm/state`): a `needs_input`/`done` verdict wins outright — even on
+    /// state file (`~/.helm/<agent>/state`): a `needs_input`/`done` verdict wins outright — even on
     /// a row the registry still reports busy, which is how a mid-turn AskUserQuestion
     /// surfaces. Idle rows with no verdict fall back to the in-process tail classify. Cold
     /// rows pay no IO.
@@ -204,7 +204,7 @@ public struct SessionStore {
     }
 
     /// Fold a live row's hook-state verdict into its final display state. `stateReason` is
-    /// the `~/.helm/state` verdict (nil = no file, or a non-attention `running` marker);
+    /// the `~/.helm/<agent>/state` verdict (nil = no file, or a non-attention `running` marker);
     /// `classifyTail` is the lazy in-process fallback, run only for an idle row with no
     /// verdict. A verdict promotes even a busy row to `.liveIdle` so a session that paused
     /// to ask (AskUserQuestion) doesn't hide behind its busy status. Cold rows pass through.
@@ -381,7 +381,7 @@ public struct SessionStore {
     }
 
     static func stateDir(home: String) -> URL {
-        URL(fileURLWithPath: home).appendingPathComponent(".helm/state")
+        URL(fileURLWithPath: home).appendingPathComponent(".helm/claude/state")
     }
 
     static func stateFileURL(_ sessionId: String, home: String) -> URL {
