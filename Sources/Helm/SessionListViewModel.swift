@@ -118,6 +118,14 @@ final class SessionListViewModel: ObservableObject {
         }
     }
 
+    /// Launchable projects for the new-chat picker: every tracked workspace folder, ranked
+    /// recent-first, with its launch path. Built from the already-loaded session cache plus
+    /// the configured folders — no extra filesystem scan, so the picker opens instantly.
+    func projectChoices() -> [ProjectChoice] {
+        SessionStore.projectChoices(workspaceFolders: HelmConfig.load().resolvedWorkspaceFolders(),
+                                    sessions: all.flatMap(\.sessions))
+    }
+
     /// Detail-pane rows. Searching → global fuzzy matches across every project (live +
     /// cold). Otherwise → the selected project's cold history (live lives in the rail).
     var detailRows: [ChatSession] {

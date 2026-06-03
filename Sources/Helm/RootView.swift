@@ -54,7 +54,13 @@ struct ViewTransition: Equatable {
 final class AppShellModel: ObservableObject {
     @Published private(set) var transition = ViewTransition(view: .attention, animated: false,
                                                             forward: true, token: 0)
+    /// The new-chat picker overlays the current view rather than being an `AppView` of its
+    /// own — it's an action surface, not a mode, so it stays out of the tab order / ⌘-digits.
+    @Published private(set) var newChatActive = false
     var view: AppView { transition.view }
+
+    func openNewChat() { newChatActive = true }
+    func closeNewChat() { newChatActive = false }
 
     /// A user switch — slides, direction from tab order.
     func select(_ v: AppView) {
@@ -81,8 +87,10 @@ struct RootView: View {
     @ObservedObject var sessions: SessionListViewModel
     @ObservedObject var tasks: TaskListViewModel
     @ObservedObject var prs: PRListViewModel
+    @ObservedObject var newChat: NewChatViewModel
     let onPickSession: (ChatSession) -> Void
     let onNewChat: () -> Void
+    let onLaunchNewChat: (ProjectChoice) -> Void
     let onOpenTask: (VaultTask) -> Void
     let onCycleTask: () -> Void
     let onOpenSource: (TaskSource) -> Void
@@ -107,9 +115,17 @@ struct RootView: View {
 
     var body: some View {
         GeometryReader { geo in
-            content
-                .frame(width: geo.size.width, height: geo.size.height)
-                .offset(x: offset)
+            ZStack {
+                content
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .offset(x: offset)
+                    .opacity(shell.newChatActive ? 0 : 1)   // hidden beneath the picker, state kept
+                if shell.newChatActive {
+                    NewChatPickerView(model: newChat, onLaunch: onLaunchNewChat)
+                        .frame(width: geo.size.width, height: geo.size.height)
+                        .transition(.opacity)
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
@@ -119,6 +135,7 @@ struct RootView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(.white.opacity(0.08), lineWidth: 1)
         )
+        .animation(.easeOut(duration: 0.12), value: shell.newChatActive)
         .onAppear { shown = shell.view }
         .onChange(of: shell.transition.token) { _, _ in apply(shell.transition) }
     }

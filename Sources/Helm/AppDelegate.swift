@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let model = SessionListViewModel()
     private let tasksModel = TaskListViewModel()
     private let prsModel = PRListViewModel()
+    private let newChatModel = NewChatViewModel()
     private var hotKey: GlobalHotKey?
     private var jumpHotKey: GlobalHotKey?
     private var keyMonitor: Any?
@@ -48,8 +49,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sessions: model,
             tasks: tasksModel,
             prs: prsModel,
+            newChat: newChatModel,
             onPickSession:       { [weak self] in self?.pick($0) },
-            onNewChat:           { [weak self] in self?.newChat() },
+            onNewChat:           { [weak self] in self?.openNewChatPicker() },
+            onLaunchNewChat:     { [weak self] in self?.newChatInProject($0) },
             onOpenTask:          { [weak self] in self?.openTask($0) },
             onCycleTask:         { [weak self] in self?.tasksModel.cycleSelected() },
             onOpenSource:        { [weak self] in self?.openSource($0) },
@@ -168,6 +171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func show() {
+        shell.closeNewChat()              // a fresh summon never reopens the picker
         shell.snap(to: .attention)        // each summon snaps to the launcher (no slide)
         resizePanel(for: .attention)      // size before it's visible
         panel.makeKeyAndOrderFront(nil)
@@ -184,6 +188,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func hide() {
+        shell.closeNewChat()
         removeKeyMonitor()
         attentionModel.stopTicking()
         model.stopTicking()
@@ -203,10 +208,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func newChat() {
-        let cwd = model.selectedSession?.cwd
+    /// ⌘N (any view): open the new-chat picker over the current view. Seeded from the warm
+    /// session cache and pre-selected to the project you're looking at — so ⌘N then ↵ starts
+    /// a chat in the current project, while typing retargets to any other tracked one.
+    private func openNewChatPicker() {
+        guard !shell.newChatActive else { return }
+        newChatModel.open(model.projectChoices(), preselect: contextProject())
+        shell.openNewChat()
+        panel.setPickerFrame(contentHeight: newChatContentHeight())
+    }
+
+    /// Close the picker and restore the underlying view's frame.
+    private func closeNewChatPicker() {
+        guard shell.newChatActive else { return }
+        shell.closeNewChat()
+        resizePanel(for: shell.view)
+    }
+
+    private func newChatInProject(_ choice: ProjectChoice) {
+        shell.closeNewChat()
         hide()
-        TerminalDispatcher.newChat(cwd: cwd?.nonEmpty ?? NSHomeDirectory())
+        TerminalDispatcher.newChat(cwd: choice.path)
+    }
+
+    /// The project to pre-select when the picker opens: whatever the current view is focused
+    /// on. nil (→ most-recently-active) for views with no project context.
+    private func contextProject() -> String? {
+        switch shell.view {
+        case .sessions:  return model.selectedProject
+        case .attention: return (attentionModel.selectedItem as? ChatSession)?.project
+        case .tasks, .prs: return nil
+        }
+    }
+
+    /// Estimated picker height — query line + footer + its visible project rows, capped so a
+    /// long list scrolls rather than growing the panel past the frame cap.
+    private func newChatContentHeight() -> CGFloat {
+        let header: CGFloat = 46, footer: CGFloat = 40, dividers: CGFloat = 2, listVPad: CGFloat = 12
+        let rowHeight: CGFloat = 44
+        let rows = max(1, min(newChatModel.choices.count, 9))
+        return header + footer + dividers + listVPad + CGFloat(rows) * rowHeight
     }
 
     /// ⌥⇧Space: jump straight to the session that wants you — needs-input first, then
@@ -340,9 +381,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let cmd = event.modifierFlags.contains(.command)
         let option = event.modifierFlags.contains(.option)
 
-        // View switching: ⌘<digit> selects the view at that slot in AppView.allCases.
-        // Global to every view; a new AppView case is reachable here with no edit.
+        // The new-chat picker is a modal overlay: while it's up it owns every keystroke.
+        if shell.newChatActive { return handleNewChat(event, cmd: cmd, option: option) }
+
+        // ⌘N anywhere opens the picker; ⌘<digit> selects the view at that slot; ⌘O adds a
+        // folder. All global to every view — a new AppView case is reachable with no edit.
         if cmd {
+            if Int(event.keyCode) == kVK_ANSI_N { openNewChatPicker(); return true }
             if let digit = Self.digitKeyCodes[Int(event.keyCode)], let view = AppView.forDigit(digit) {
                 shell.select(view); return true
             }
@@ -354,6 +399,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .tasks:     return handleTasks(event, cmd: cmd, option: option)
         case .prs:       return handlePRs(event, cmd: cmd, option: option)
         }
+    }
+
+    /// Picker keys: ↵ launches a chat in the selected project, esc backs out to the view you
+    /// were on (not a full dismiss), arrows move, the rest is typeahead over project names.
+    private func handleNewChat(_ event: NSEvent, cmd: Bool, option: Bool) -> Bool {
+        switch Int(event.keyCode) {
+        case kVK_Escape:      closeNewChatPicker(); return true
+        case kVK_Return, kVK_ANSI_KeypadEnter:
+            if let c = newChatModel.selectedChoice { newChatInProject(c) } else { NSSound.beep() }
+            return true
+        case kVK_DownArrow:   newChatModel.clearSelection(); newChatModel.move(by: 1);  return true
+        case kVK_UpArrow:     newChatModel.clearSelection(); newChatModel.move(by: -1); return true
+        case kVK_ANSI_A where cmd: newChatModel.selectAllQuery(); return true
+        case kVK_ANSI_N where cmd: closeNewChatPicker();         return true   // ⌘N toggles it back off
+        case kVK_Delete:
+            if cmd        { newChatModel.clearQuery() }
+            else if option { newChatModel.deleteWordBack() }
+            else           { newChatModel.backspaceQuery() }
+            return true
+        default: break
+        }
+        return appendIfPrintable(event, cmd: cmd, to: { [weak self] in self?.newChatModel.appendQuery($0) })
     }
 
     private func handleAttention(_ event: NSEvent, cmd: Bool, option: Bool) -> Bool {
@@ -396,7 +463,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else if option { model.deleteWordBack() }
             else             { model.backspaceQuery() }
             return true
-        case kVK_ANSI_N where cmd: newChat();               return true
         case kVK_ANSI_X where cmd: killSelected();          return true
         default: break
         }

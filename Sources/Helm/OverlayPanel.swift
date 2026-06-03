@@ -18,6 +18,11 @@ final class OverlayPanel: NSPanel {
     private let launcherWidth: CGFloat = 700
     private let launcherMaxHeightFraction: CGFloat = 0.7
 
+    /// New-chat picker: a command-palette-shaped box — narrower than the launcher, height
+    /// fit to its project rows up to a cap.
+    private let pickerWidth: CGFloat = 560
+    private let pickerMaxHeightFraction: CGFloat = 0.6
+
     /// Top edge as a fraction of the screen height below the visible top — fixed across
     /// resizes so the panel doesn't jump when it grows or shrinks.
     private let topInsetFraction: CGFloat = 0.14
@@ -65,6 +70,14 @@ final class OverlayPanel: NSPanel {
         guard let visible = currentVisibleFrame() else { return }
         let w = min(launcherWidth, visible.width * 0.5)
         let h = min(contentHeight, visible.height * launcherMaxHeightFraction)
+        apply(width: w, height: h, in: visible)
+    }
+
+    /// The new-chat picker size — a compact palette, height fit to `contentHeight` up to a cap.
+    func setPickerFrame(contentHeight: CGFloat) {
+        guard let visible = currentVisibleFrame() else { return }
+        let w = min(pickerWidth, visible.width * 0.5)
+        let h = min(contentHeight, visible.height * pickerMaxHeightFraction)
         apply(width: w, height: h, in: visible)
     }
 
