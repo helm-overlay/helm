@@ -78,7 +78,7 @@ func installClaude(home: String) {
         """)
     }
 
-    let stateDir = SessionStore.stateDir(home: home)
+    let stateDir = URL(fileURLWithPath: home).appendingPathComponent(".helm/claude/state")
     try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
     let settings = URL(fileURLWithPath: home).appendingPathComponent(".claude/settings.json")
 
@@ -112,7 +112,7 @@ func installPi(home: String) {
         """)
     }
 
-    let stateDir = PiSessionBackend.stateDir(home: home)
+    let stateDir = URL(fileURLWithPath: home).appendingPathComponent(".helm/pi/state")
     try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
 
     print("✓ Installed the Helm Pi extension")
