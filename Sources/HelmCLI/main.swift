@@ -59,45 +59,103 @@ func runInit(_ rest: [String]) {
     }
 }
 
+let piPluginSource = "git:github.com/helm-overlay/pi-plugin"
+let claudePluginSource = "github.com/helm-overlay/claude-plugin"
+
 func installClaude(home: String) {
-    let author = gitAuthor()
-    let report: ClaudePluginInstaller.Report
-    do {
-        report = try ClaudePluginInstaller.install(home: home, author: author)
-    } catch {
-        fail("helm init claude: could not write the plugin — \(error.localizedDescription)")
+    if home != NSHomeDirectory() {
+        installClaudeFallback(home: home)
+        return
     }
 
-    print("✓ Installed the Helm hooks plugin")
-    print("  plugin:     \(report.pluginDir)")
-    print("  hooks:      SessionStart · UserPromptSubmit · PreToolUse(AskUserQuestion) · PostToolUse(AskUserQuestion) · Stop · SessionEnd")
-    print("  writes:     \(report.stateDir)/<sessionId>.json")
-    print("")
-    print("→ Restart Claude Code (or start a new session) so the plugin auto-loads as `helm@skills-dir`.")
+    let result = runCommand("claude", ["plugin", "install", claudePluginSource])
+    guard result.ok else {
+        fail("""
+        helm init claude: `claude plugin install \(claudePluginSource)` failed.
+        \(result.output)
 
-    if report.legacyHooksInSettings {
+        If your Claude Code CLI does not support plugin installs yet, install manually from:
+        https://github.com/helm-overlay/claude-plugin
+        """)
+    }
+
+    let stateDir = SessionStore.stateDir(home: home)
+    try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+    let settings = URL(fileURLWithPath: home).appendingPathComponent(".claude/settings.json")
+
+    print("✓ Installed the Helm Claude plugin")
+    print("  source:     \(claudePluginSource)")
+    print("  hooks:      SessionStart · UserPromptSubmit · PreToolUse(AskUserQuestion) · PostToolUse(AskUserQuestion) · Stop · SessionEnd")
+    print("  writes:     \(stateDir.path)/<sessionId>.json")
+    print("")
+    print("→ Restart Claude Code (or start a new session) so the plugin loads.")
+
+    if ClaudePluginInstaller.settingsReferencesHelmState(settings) {
         print("")
-        print("⚠ \(report.settingsPath) still has hand-rolled hooks writing ~/.helm/claude/state.")
-        print("  The plugin now owns these. Remove the Stop / UserPromptSubmit / SessionEnd")
-        print("  entries that touch ~/.helm/claude/state from settings.json so the classifier")
-        print("  doesn't run twice per turn. (Left untouched — edit it yourself.)")
+        print("⚠ \(settings.path) still has hand-rolled hooks writing ~/.helm/claude/state.")
+        print("  Remove those entries so the classifier doesn't run twice per turn.")
+    }
+}
+
+func installClaudeFallback(home: String) {
+    let author = gitAuthor()
+    do {
+        let report = try ClaudePluginInstaller.install(home: home, author: author)
+        print("✓ Installed the Helm hooks plugin")
+        print("  plugin:     \(report.pluginDir)")
+        print("  writes:     \(report.stateDir)/<sessionId>.json")
+    } catch {
+        fail("helm init claude: could not write the plugin — \(error.localizedDescription)")
     }
 }
 
 func installPi(home: String) {
-    let report: PiExtensionInstaller.Report
-    do {
-        report = try PiExtensionInstaller.install(home: home)
-    } catch {
-        fail("helm init pi: could not write the extension — \(error.localizedDescription)")
+    if home != NSHomeDirectory() {
+        do {
+            let report = try PiExtensionInstaller.install(home: home)
+            print("✓ Installed the Helm Pi extension")
+            print("  extension:  \(report.extensionPath)")
+            print("  writes:     \(report.stateDir)/<sessionId>.json")
+        } catch {
+            fail("helm init pi: could not write the extension — \(error.localizedDescription)")
+        }
+        return
     }
 
+    let result = runCommand("pi", ["install", piPluginSource])
+    guard result.ok else {
+        fail("""
+        helm init pi: `pi install \(piPluginSource)` failed.
+        \(result.output)
+
+        Install manually with:
+        pi install \(piPluginSource)
+        """)
+    }
+
+    let stateDir = PiSessionBackend.stateDir(home: home)
+    try? FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+
     print("✓ Installed the Helm Pi extension")
-    print("  extension:  \(report.extensionPath)")
+    print("  source:     \(piPluginSource)")
     print("  hooks:      session_start · before_agent_start · agent_start · agent_end")
-    print("  writes:     \(report.stateDir)/<sessionId>.json")
+    print("  writes:     \(stateDir.path)/<sessionId>.json")
     print("")
     print("→ Restart Pi (or start a new session) so the extension reloads.")
+}
+
+func runCommand(_ executable: String, _ arguments: [String]) -> (ok: Bool, output: String) {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    p.arguments = [executable] + arguments
+    let pipe = Pipe()
+    p.standardOutput = pipe
+    p.standardError = pipe
+    do { try p.run() } catch { return (false, error.localizedDescription) }
+    p.waitUntilExit()
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return (p.terminationStatus == 0, output)
 }
 
 /// Best-effort author stamp for the generated plugin.json. Missing git config → omitted.

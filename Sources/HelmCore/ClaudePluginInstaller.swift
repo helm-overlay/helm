@@ -47,7 +47,7 @@ public enum ClaudePluginInstaller {
 
     /// Cheap detection: does `settings.json` mention the Helm Claude state dir at all? A
     /// substring check is enough to decide whether to print the cleanup note — we never edit the file.
-    static func settingsReferencesHelmState(_ url: URL) -> Bool {
+    public static func settingsReferencesHelmState(_ url: URL) -> Bool {
         guard let text = try? String(contentsOf: url, encoding: .utf8) else { return false }
         return text.contains(".helm/claude/state")
     }
