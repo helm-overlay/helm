@@ -16,16 +16,16 @@ func printUsage() {
     helm — session-overlay setup
 
     Usage:
-      helm init claude [--home <dir>]   Install the Claude Code hooks plugin
-      helm init pi [--home <dir>]       Install the Pi extension
+      helm init claude   Install the Claude Code hooks plugin
+      helm init pi       Install the Pi extension
 
     Run `helm init claude`, then restart Claude Code so the plugin loads.
     Run `helm init pi`, then restart Pi so the extension reloads.
     """)
 }
 
-/// Pull `--home <dir>` out of the args (defaulting to the real home). Lets the install
-/// target a sandbox in tests, since NSHomeDirectory() ignores $HOME on macOS.
+/// Pull `--home <dir>` out of the args (defaulting to the real home). External plugin
+/// installation only supports the real home; callers using --home get a clear error.
 func takeHome(_ args: inout [String]) -> String {
     guard let i = args.firstIndex(of: "--home") else { return NSHomeDirectory() }
     guard i + 1 < args.count else { fail("--home needs a directory") }
@@ -63,9 +63,8 @@ let piPluginSource = "git:github.com/helm-overlay/pi-plugin"
 let claudePluginSource = "github.com/helm-overlay/claude-plugin"
 
 func installClaude(home: String) {
-    if home != NSHomeDirectory() {
-        installClaudeFallback(home: home)
-        return
+    guard home == NSHomeDirectory() else {
+        fail("helm init claude: --home is not supported when installing external plugins")
     }
 
     let result = runCommand("claude", ["plugin", "install", claudePluginSource])
@@ -97,29 +96,9 @@ func installClaude(home: String) {
     }
 }
 
-func installClaudeFallback(home: String) {
-    let author = gitAuthor()
-    do {
-        let report = try ClaudePluginInstaller.install(home: home, author: author)
-        print("✓ Installed the Helm hooks plugin")
-        print("  plugin:     \(report.pluginDir)")
-        print("  writes:     \(report.stateDir)/<sessionId>.json")
-    } catch {
-        fail("helm init claude: could not write the plugin — \(error.localizedDescription)")
-    }
-}
-
 func installPi(home: String) {
-    if home != NSHomeDirectory() {
-        do {
-            let report = try PiExtensionInstaller.install(home: home)
-            print("✓ Installed the Helm Pi extension")
-            print("  extension:  \(report.extensionPath)")
-            print("  writes:     \(report.stateDir)/<sessionId>.json")
-        } catch {
-            fail("helm init pi: could not write the extension — \(error.localizedDescription)")
-        }
-        return
+    guard home == NSHomeDirectory() else {
+        fail("helm init pi: --home is not supported when installing external plugins")
     }
 
     let result = runCommand("pi", ["install", piPluginSource])
@@ -158,20 +137,3 @@ func runCommand(_ executable: String, _ arguments: [String]) -> (ok: Bool, outpu
     return (p.terminationStatus == 0, output)
 }
 
-/// Best-effort author stamp for the generated plugin.json. Missing git config → omitted.
-func gitAuthor() -> (name: String, email: String)? {
-    func config(_ key: String) -> String? {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        p.arguments = ["git", "config", "--get", key]
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = FileHandle.nullDevice
-        guard (try? p.run()) != nil else { return nil }
-        p.waitUntilExit()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-    }
-    guard let name = config("user.name"), let email = config("user.email") else { return nil }
-    return (name, email)
-}
