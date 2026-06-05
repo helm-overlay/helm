@@ -11,12 +11,18 @@ final class ProjectChoiceTests: XCTestCase {
 
     private let folders = ["/Users/me/projects/helm", "/Users/me/projects/api", "/Users/me/projects/web"]
 
+    /// Projects only — the pinned Singular Chats launchpad is asserted separately.
+    private func projects(_ choices: [ProjectChoice]) -> [ProjectChoice] {
+        choices.filter { !$0.isLaunchpad }
+    }
+
     func testMembershipComesFromFoldersNotSessions() {
         // No sessions at all: every tracked folder still shows up as a launchable choice.
         let choices = SessionStore.projectChoices(workspaceFolders: folders, sessions: [])
-        XCTAssertEqual(choices.map(\.name), ["api", "helm", "web"])   // untouched → alphabetical
-        XCTAssertEqual(Set(choices.map(\.path)), Set(folders))        // every folder present, paths intact
-        XCTAssertTrue(choices.allSatisfy { $0.lastActive == nil && $0.liveCount == 0 })
+        let projects = projects(choices)
+        XCTAssertEqual(projects.map(\.name), ["api", "helm", "web"])   // untouched → alphabetical
+        XCTAssertEqual(Set(projects.map(\.path)), Set(folders))        // every folder present, paths intact
+        XCTAssertTrue(projects.allSatisfy { $0.lastActive == nil && $0.liveCount == 0 })
     }
 
     func testRanksActiveFoldersByRecencyThenUntouchedAlphabetical() {
@@ -27,7 +33,24 @@ final class ProjectChoiceTests: XCTestCase {
         ]
         let choices = SessionStore.projectChoices(workspaceFolders: folders, sessions: sessions)
         // api (now) > helm (1h ago) > web (untouched, alphabetical last).
-        XCTAssertEqual(choices.map(\.name), ["api", "helm", "web"])
+        XCTAssertEqual(projects(choices).map(\.name), ["api", "helm", "web"])
+    }
+
+    func testSingularChatsLaunchpadIsPinnedFirst() {
+        let now = Date(timeIntervalSinceReferenceDate: 3_000_000)
+        let sessions = [
+            session(project: "api", cwd: "/Users/me/projects/api", lastActive: now),   // most recent project
+            session(project: SessionStore.singularChatsGroup, cwd: "\(NSHomeDirectory())/Home",
+                    lastActive: now.addingTimeInterval(-9999), live: true),
+        ]
+        let choices = SessionStore.projectChoices(workspaceFolders: folders, sessions: sessions)
+        let launchpad = choices.first
+        XCTAssertEqual(launchpad?.name, SessionStore.singularChatsGroup)   // pinned first, ahead of api
+        XCTAssertEqual(launchpad?.isLaunchpad, true)
+        XCTAssertEqual(launchpad?.path, "\(NSHomeDirectory())/Home")
+        XCTAssertEqual(launchpad?.lastActive, now.addingTimeInterval(-9999))   // recency from ~/Home sessions
+        XCTAssertEqual(launchpad?.liveCount, 1)
+        XCTAssertEqual(choices.filter { $0.isLaunchpad }.count, 1)
     }
 
     func testUsesMostRecentSessionPerFolderAndCountsLive() {
@@ -42,29 +65,34 @@ final class ProjectChoiceTests: XCTestCase {
         XCTAssertEqual(helm?.liveCount, 2)
     }
 
-    func testIgnoresSessionsOutsideTrackedFolders() {
+    func testIgnoresOtherSessionsButKeepsSingularChats() {
         let now = Date()
         let sessions = [
-            session(project: "Other", cwd: "/tmp/scratch", lastActive: now),
-            session(project: SessionStore.singularChatsGroup, cwd: "/Users/me/Home", lastActive: now),
+            session(project: "Other", cwd: "/tmp/scratch", lastActive: now),   // untracked → ignored
+            session(project: SessionStore.singularChatsGroup, cwd: "\(NSHomeDirectory())/Home", lastActive: now),
         ]
         let choices = SessionStore.projectChoices(workspaceFolders: folders, sessions: sessions)
-        XCTAssertEqual(Set(choices.map(\.name)), ["helm", "api", "web"])   // no Other / Singular Chats row
-        XCTAssertTrue(choices.allSatisfy { $0.lastActive == nil })
+        XCTAssertFalse(choices.contains { $0.name == "Other" })
+        XCTAssertEqual(Set(projects(choices).map(\.name)), ["helm", "api", "web"])
+        XCTAssertTrue(projects(choices).allSatisfy { $0.lastActive == nil })   // no project saw a session
+        XCTAssertEqual(choices.first { $0.isLaunchpad }?.lastActive, now)      // launchpad picks up the ~/Home one
     }
 
     func testDedupesFolderListedTwice() {
         let choices = SessionStore.projectChoices(
             workspaceFolders: ["/Users/me/projects/helm", "/Users/me/projects/helm/"], sessions: [])
-        XCTAssertEqual(choices.count, 1)
+        XCTAssertEqual(projects(choices).count, 1)
     }
 
     func testFilterFuzzyMatchesNameOrPath() {
+        // Project-name assertions exclude the launchpad: its path is the real ~/Home, which
+        // fuzzy-matches environment-dependent queries and would make these non-deterministic.
         let choices = SessionStore.projectChoices(workspaceFolders: folders, sessions: [])
-        XCTAssertEqual(SessionStore.filterProjectChoices(choices, query: "hl").map(\.name), ["helm"])
-        XCTAssertEqual(SessionStore.filterProjectChoices(choices, query: "proj/we").map(\.name), ["web"])
+        let filter = { (q: String) in self.projects(SessionStore.filterProjectChoices(choices, query: q)).map(\.name) }
+        XCTAssertEqual(filter("hl"), ["helm"])
+        XCTAssertEqual(filter("proj/we"), ["web"])
         XCTAssertEqual(SessionStore.filterProjectChoices(choices, query: "  ").map(\.name).sorted(),
-                       ["api", "helm", "web"])   // blank query = unfiltered
-        XCTAssertTrue(SessionStore.filterProjectChoices(choices, query: "zzz").isEmpty)
+                       ["Singular Chats", "api", "helm", "web"])   // blank query = unfiltered (launchpad included)
+        XCTAssertTrue(filter("zzz").isEmpty)
     }
 }

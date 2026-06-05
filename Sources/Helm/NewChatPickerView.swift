@@ -107,7 +107,7 @@ private struct ProjectChoiceRow: View {
 
     var body: some View {
         HStack(spacing: 11) {
-            Image(systemName: "folder")
+            Image(systemName: choice.isLaunchpad ? "sparkles" : "folder")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .frame(width: 16)
@@ -116,7 +116,8 @@ private struct ProjectChoiceRow: View {
                 Text(choice.name).lineLimit(1)
                     .font(.system(size: 14, weight: selected ? .semibold : .regular))
                     .foregroundStyle(.primary)
-                Text(abbreviatedPath).lineLimit(1).truncationMode(.head)
+                Text(choice.isLaunchpad ? "one-off chat in ~/Home" : abbreviatedPath)
+                    .lineLimit(1).truncationMode(.head)
                     .font(.system(size: 10)).foregroundStyle(.tertiary)
             }
 

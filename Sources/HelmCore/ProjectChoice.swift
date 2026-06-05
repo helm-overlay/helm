@@ -8,14 +8,17 @@ public struct ProjectChoice: Identifiable, Equatable {
     public let path: String        // absolute directory a new chat launches in
     public let lastActive: Date?   // most-recent session here; nil if the folder is untouched
     public let liveCount: Int      // sessions currently running here
+    public let isLaunchpad: Bool   // the ~/Home one-off launchpad, not a tracked project
 
     public var id: String { path }
 
-    public init(name: String, path: String, lastActive: Date?, liveCount: Int) {
+    public init(name: String, path: String, lastActive: Date?, liveCount: Int,
+                isLaunchpad: Bool = false) {
         self.name = name
         self.path = path
         self.lastActive = lastActive
         self.liveCount = liveCount
+        self.isLaunchpad = isLaunchpad
     }
 }
 
@@ -23,8 +26,9 @@ extension SessionStore {
     /// The new-chat picker's project list: one row per tracked workspace folder, ranked
     /// recent-first. Membership comes from `workspaceFolders` alone — a freshly added,
     /// never-used folder still launches — while `sessions` supply each folder's recency and
-    /// live tally for the ranking and glyphs. Sessions outside any tracked folder ("Other",
-    /// the ~/Home launchpad) are ignored: the picker is tracked-workspaces-only by design.
+    /// live tally for the ranking and glyphs. Sessions outside any tracked folder ("Other") are
+    /// ignored, but the ~/Home launchpad ("Singular Chats") is pinned first as its own row —
+    /// one-offs are launched, not tracked.
     public static func projectChoices(workspaceFolders: [String], sessions: [ChatSession]) -> [ProjectChoice] {
         let byProject = Dictionary(grouping: sessions, by: \.project)
         var seen = Set<String>()
@@ -37,7 +41,16 @@ extension SessionStore {
                                  lastActive: rows.map(\.lastActive).max(),
                                  liveCount: rows.filter(\.isLive).count)
         }
-        return choices.sorted(by: rankProjectChoice)
+        return [singularChatsChoice(sessions: byProject[singularChatsGroup] ?? [])]
+            + choices.sorted(by: rankProjectChoice)
+    }
+
+    /// The pinned launchpad row: a fresh chat in ~/Home (a drive-by), carrying its live tally
+    /// and recency so it reads like any other row while staying out of the project ranking.
+    static func singularChatsChoice(sessions: [ChatSession]) -> ProjectChoice {
+        ProjectChoice(name: singularChatsGroup, path: "\(NSHomeDirectory())/Home",
+                      lastActive: sessions.map(\.lastActive).max(),
+                      liveCount: sessions.filter(\.isLive).count, isLaunchpad: true)
     }
 
     /// Recent-first: a folder with activity outranks one without; two active folders sort by

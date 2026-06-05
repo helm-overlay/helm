@@ -20,13 +20,16 @@ final class NewChatViewModel: ObservableObject {
 
     /// (Re)seed the picker as it opens. `preselect` names the project to land on (the one
     /// the user was looking at when they hit ⌘N); when it isn't in the list — or isn't
-    /// given — selection falls to the top row, i.e. the most-recently-active project.
+    /// given — selection falls to the most-recently-active *project*, skipping the pinned
+    /// Singular Chats launchpad so ⌘N then ↵ never starts a drive-by by accident.
     func open(_ choices: [ProjectChoice], preselect: String? = nil) {
         self.choices = choices
         query = ""
         querySelected = false
         lastEdit = Date()
-        selection = choices.first { $0.name == preselect }?.id ?? choices.first?.id
+        selection = choices.first { $0.name == preselect }?.id
+            ?? choices.first { !$0.isLaunchpad }?.id
+            ?? choices.first?.id
     }
 
     // MARK: Query (typeahead) — mirrors the other launchers so editing feels identical.
