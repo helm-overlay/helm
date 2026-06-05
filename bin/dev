@@ -6,6 +6,8 @@
 #   bin/dev ship      rebuild Helm.app Release, install to /Applications
 #   bin/dev test      generate project + run HelmCore tests
 #   bin/dev check     generate project + run tests + Debug app build
+#   bin/dev restart   kill any running Helm and relaunch the Debug build
+#   bin/dev run       rebuild Debug app, then restart
 
 set -e
 
@@ -29,6 +31,16 @@ install_cli() {
   mkdir -p "$HOME/.local/bin"
   ln -sf "$here/build/$config/helm" "$HOME/.local/bin/helm"
   echo "helm CLI linked: $HOME/.local/bin/helm -> $here/build/$config/helm"
+}
+
+restart_app() {
+  local app="$here/build/Debug/Helm.app"
+  [ -d "$app" ] || { echo "no Debug build at $app — run 'bin/dev app' first" >&2; exit 1; }
+  # Kill every running Helm (Debug build, /Applications copy, stale instances) so the
+  # ⌥Space hotkey isn't held by an old process when the new one launches.
+  pkill -x Helm 2>/dev/null && sleep 0.5 || true
+  open -n "$app"
+  echo "restarted: $app"
 }
 
 case "${1:-}" in
@@ -63,8 +75,19 @@ case "${1:-}" in
                -configuration Debug build
     install_cli Debug
     ;;
+  restart)
+    restart_app
+    ;;
+  run)
+    ensure_project
+    xcodebuild -project Helm.xcodeproj -target Helm \
+               -configuration Debug -quiet \
+               ARCHS=arm64 ONLY_ACTIVE_ARCH=YES
+    install_cli Debug
+    restart_app
+    ;;
   *)
-    echo "usage: bin/dev {app|ship|test|check}" >&2
+    echo "usage: bin/dev {app|ship|test|check|restart|run}" >&2
     exit 2
     ;;
 esac
