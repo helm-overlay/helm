@@ -9,15 +9,20 @@ private struct MockItem: AttentionItem {
     let lastActive: Date
     var badge: AttentionBadge { .pullRequest }
     var title: String { id }
+    var context: String { "" }
     var subtitle: String? { nil }
     var primaryAction: AttentionAction { .openURL("https://x/\(id)") }
 }
 
 private struct MockSource: AttentionSource {
-    let attention: [any AttentionItem]
-    let inv: [any AttentionItem]
-    func attentionItems() async -> [any AttentionItem] { attention }
-    func inventory(matching query: String) async -> [any AttentionItem] { inv }
+    let id: String
+    let all: [any AttentionItem]
+    var gate: (any AttentionItem) -> Bool = { $0.reason != .none }
+    var title: String { id }
+    var refreshPolicy: RefreshPolicy { .interval(1) }
+    func allItems() async -> [any AttentionItem] { all }
+    func promotes(_ item: any AttentionItem) -> Bool { gate(item) }
+    // inventory(matching:) uses the default: allItems() filtered by each row's matches(_:).
 }
 
 final class AttentionFeedTests: XCTestCase {
@@ -74,17 +79,46 @@ final class AttentionFeedTests: XCTestCase {
     }
 
     func testFeedMergesSourcesAndOrders() async {
-        let sessions = MockSource(attention: [mock("s1", .needsReview, 100)], inv: [])
-        let prs = MockSource(attention: [mock("p1", .prChangesRequested, 50)], inv: [])
+        let sessions = MockSource(id: "sessions", all: [mock("s1", .needsReview, 100)])
+        let prs = MockSource(id: "prs", all: [mock("p1", .prChangesRequested, 50)])
         let feed = AttentionFeed([sessions, prs])
         let items = await feed.items()
         XCTAssertEqual(items.map(\.id), ["p1", "s1"])   // rank 0 (PR) before rank 1 (session)
     }
 
-    func testSearchConcatenatesInventoryAcrossSources() async {
-        let a = MockSource(attention: [], inv: [mock("a", .none, 1)])
-        let b = MockSource(attention: [], inv: [mock("b", .none, 2)])
-        let found = await AttentionFeed([a, b]).search("anything")
-        XCTAssertEqual(Set(found.map(\.id)), ["a", "b"])
+    func testItemsHonorsPerSourcePromotesGate() async {
+        // A source that refuses to promote even a loud (rank-0) row keeps it out of the feed,
+        // proving the gate is applied independent of urgency ordering.
+        let source = MockSource(
+            id: "s",
+            all: [mock("kept", .prCiFailed, 50), mock("gated", .needsInput, 100)],
+            gate: { $0.id == "kept" })
+        let feed = await AttentionFeed([source]).items()
+        XCTAssertEqual(feed.map(\.id), ["kept"])
+    }
+
+    func testInventoryRowsHiddenAtRestButSurfacedOnSearch() async {
+        // The resting=push / expansion=pull split: a `.none` (inventory-only) row never reaches
+        // the feed, but search finds it across the source's full set.
+        let source = MockSource(id: "s", all: [mock("cold", .none, 100), mock("loud", .needsInput, 50)])
+        let feed = AttentionFeed([source])
+        let resting = await feed.items()
+        let searched = await feed.search("cold")
+        XCTAssertEqual(resting.map(\.id), ["loud"])     // .none hidden at rest
+        XCTAssertEqual(searched.map(\.id), ["cold"])    // surfaced on search
+    }
+
+    func testSearchMatchesAndConcatenatesAcrossSources() async {
+        let a = MockSource(id: "a", all: [mock("apple", .none, 1), mock("kiwi", .none, 3)])
+        let b = MockSource(id: "b", all: [mock("avocado", .none, 2)])
+        let found = await AttentionFeed([a, b]).search("a")   // matches apple + avocado, not kiwi
+        XCTAssertEqual(Set(found.map(\.id)), ["apple", "avocado"])
+    }
+
+    func testDefaultMatchesIsSubstringOverVisibleText() {
+        let item = mock("Fix retry backoff", .needsInput, 0)   // MockItem.title == id
+        XCTAssertTrue(item.matches("retry"))
+        XCTAssertFalse(item.matches("zzz"))
+        XCTAssertTrue(item.matches(""))   // empty query matches everything
     }
 }

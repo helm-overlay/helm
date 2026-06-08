@@ -14,9 +14,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: OverlayPanel!
     private let shell = AppShellModel()
     private let attentionModel = AttentionListViewModel()
-    private let model = SessionListViewModel()
-    private let tasksModel = TaskListViewModel()
-    private let prsModel = PRListViewModel()
     private let newChatModel = NewChatViewModel()
     private var hotKey: GlobalHotKey?
     private var jumpHotKey: GlobalHotKey?
@@ -35,31 +32,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hotKeyMods = UInt32(optionKey)
     private let jumpHotKeyMods = UInt32(optionKey | shiftKey)
 
-    /// ANSI keyCodes for the 1–9 row keys, mapped to their digit. The codes aren't
-    /// contiguous, so they're spelled out rather than offset from kVK_ANSI_1.
-    private static let digitKeyCodes: [Int: Int] = [
-        kVK_ANSI_1: 1, kVK_ANSI_2: 2, kVK_ANSI_3: 3, kVK_ANSI_4: 4, kVK_ANSI_5: 5,
-        kVK_ANSI_6: 6, kVK_ANSI_7: 7, kVK_ANSI_8: 8, kVK_ANSI_9: 9,
-    ]
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         let root = RootView(
             shell: shell,
             attention: attentionModel,
-            sessions: model,
-            tasks: tasksModel,
-            prs: prsModel,
             newChat: newChatModel,
-            onPickSession:       { [weak self] in self?.pick($0) },
-            onNewChat:           { [weak self] in self?.openNewChatPicker() },
             onLaunchNewChat:     { [weak self] in self?.newChatInProject($0) },
-            onOpenTask:          { [weak self] in self?.openTask($0) },
-            onCycleTask:         { [weak self] in self?.tasksModel.cycleSelected() },
-            onOpenSource:        { [weak self] in self?.openSource($0) },
-            onOpenPR:            { [weak self] in self?.openPR($0) },
-            onOpenAttention:     { [weak self] in self?.openAttentionItem($0) },
-            onResize:            { [weak self] in self?.resizePanel(for: $0) },
-            onDismiss:           { [weak self] in self?.hide() })
+            onOpenAttention:     { [weak self] in self?.openAttentionItem($0) })
         panel = OverlayPanel(content: NSHostingView(rootView: root))
         NotificationCenter.default.addObserver(
             forName: NSWindow.didResignKeyNotification, object: panel, queue: .main
@@ -67,16 +46,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { self?.hide() }
         }
 
-        // View-switch resizing is driven by RootView (onResize), timed to the slide's gap.
-        // Here we only react to the launcher's content count changing while it's shown, so
-        // the panel keeps fitting its rows.
-        attentionModel.$sessions
-            .combineLatest(attentionModel.$attentionPRs)
+        // Refit the panel whenever the launcher's content count changes while it's shown, so
+        // it keeps hugging its rows.
+        attentionModel.$sections
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                guard let self, self.panel.isVisible, self.shell.view == .attention,
+                guard let self, self.panel.isVisible,
                       !self.shell.newChatActive else { return }   // picker owns the frame while it's up
-                self.resizePanel(for: .attention)
+                self.resizePanel()
             }
             .store(in: &cancellables)
 
@@ -95,10 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("Helm: failed to register jump hotkey (⌥⇧Space may be taken).")
         }
 
-        model.reloadInBackground(animated: false) // warm caches so the first summon is instant
-        tasksModel.reloadInBackground()
-        prsModel.reloadInBackground()
-        attentionModel.reloadInBackground()
+        attentionModel.reloadInBackground() // warm caches so the first summon is instant
         startReaping()
         startNotifying()
     }
@@ -149,14 +123,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func toggle() { panel.isVisible ? hide() : show() }
 
-    /// Size the panel for a view: compact (fit-to-content) for the attention launcher,
-    /// generous for everything else. Instant — the slide masks the size change.
-    private func resizePanel(for view: AppView) {
-        if view == .attention {
-            panel.setLauncherFrame(contentHeight: attentionContentHeight())
-        } else {
-            panel.setGenerousFrame()
-        }
+    /// Size the panel to fit the launcher's content.
+    private func resizePanel() {
+        panel.setLauncherFrame(contentHeight: attentionContentHeight())
     }
 
     /// Estimated height of the launcher's content — header + footer + its visible rows and
@@ -173,28 +142,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func show() {
         shell.closeNewChat()              // a fresh summon never reopens the picker
-        shell.snap(to: .attention)        // each summon snaps to the launcher (no slide)
-        resizePanel(for: .attention)      // size before it's visible
+        resizePanel()                     // size before it's visible
         panel.makeKeyAndOrderFront(nil)
         installKeyMonitor()
         attentionModel.startTicking()
-        model.startTicking()
-        tasksModel.startTicking()
-        prsModel.startTicking()
         attentionModel.reloadInBackground()
-        model.reloadInBackground(animated: false)
-        model.resetNav()                  // each summon begins focused on the LIVE rail
-        tasksModel.reloadInBackground()
-        prsModel.reloadInBackground()
     }
 
     private func hide() {
         shell.closeNewChat()
         removeKeyMonitor()
         attentionModel.stopTicking()
-        model.stopTicking()
-        tasksModel.stopTicking()
-        prsModel.stopTicking()
         panel.orderOut(nil)
     }
 
@@ -214,16 +172,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// a chat in the current project, while typing retargets to any other tracked one.
     private func openNewChatPicker() {
         guard !shell.newChatActive else { return }
-        newChatModel.open(model.projectChoices(), preselect: contextProject())
+        let choices = SessionStore.projectChoices(
+            workspaceFolders: HelmConfig.load().resolvedWorkspaceFolders(),
+            sessions: attentionModel.cachedSessions)
+        newChatModel.open(choices, preselect: contextProject())
         shell.openNewChat()
         panel.setPickerFrame(contentHeight: newChatContentHeight())
     }
 
-    /// Close the picker and restore the underlying view's frame.
+    /// Close the picker and restore the launcher's frame.
     private func closeNewChatPicker() {
         guard shell.newChatActive else { return }
         shell.closeNewChat()
-        resizePanel(for: shell.view)
+        resizePanel()
     }
 
     private func newChatInProject(_ choice: ProjectChoice) {
@@ -235,11 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The project to pre-select when the picker opens: whatever the current view is focused
     /// on. nil (→ most-recently-active) for views with no project context.
     private func contextProject() -> String? {
-        switch shell.view {
-        case .sessions:  return model.selectedProject
-        case .attention: return (attentionModel.selectedItem as? ChatSession)?.project
-        case .tasks, .prs: return nil
-        }
+        (attentionModel.selectedItem as? ChatSession)?.project
     }
 
     /// Estimated picker height — query line + footer + its visible project rows, capped so a
@@ -265,12 +222,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 TerminalDispatcher.resume(next)
             }
         }
-    }
-
-    private func killSelected() {
-        guard let s = model.selectedSession, let pid = s.pid else { return }
-        TerminalDispatcher.closePane(pid: pid)
-        model.kill(s, pid: pid)
     }
 
     /// ⌘X in the launcher: kill the selected session row. Beeps for a non-session row (a PR
@@ -306,7 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if response == .OK {
             do {
                 _ = try HelmConfig.addWorkspaceFolders(picker.urls.map(\.path))
-                model.reloadInBackground()
+                attentionModel.reloadInBackground()
             } catch {
                 NSLog("Helm: failed to save workspace folders: \(error)")
                 NSSound.beep()
@@ -316,50 +267,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if shouldRestorePanel { show() }
     }
 
-    /// Open a task's markdown file in the user's editor. Defaults to `zed`; the
-    /// `taskEditor` config field picks something else (`code`, `cursor`, `open` for the
-    /// macOS default). The vault path is hardcoded; matches the widget.
-    private func openTask(_ task: VaultTask) {
-        let folder = task.archived ? "archive" : "tasks"
-        let path = "\(NSHomeDirectory())/Home/task-vault/\(folder)/\(task.basename).md"
-        hide()
-        let editor = HelmConfig.load().taskEditor
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        p.arguments = editor.argv + [path]
-        try? p.run()
+    /// Open an attention-launcher row via its own primary action — the row owns what Enter
+    /// does, so this never branches on the concrete row type (a new `.openURL` source needs no
+    /// change here). The session resume still casts, since terminal-pane focus needs the row.
+    private func openAttentionItem(_ item: any AttentionItem) {
+        switch item.primaryAction {
+        case .resumeSession:
+            if let session = item as? ChatSession { pick(session) }
+        case .openURL(let url):
+            openURL(url)
+        case .newChat(_, let cwd):
+            hide(); TerminalDispatcher.newChat(cwd: cwd)
+        }
     }
 
-    /// Open a task's source URL (Jira ticket / Slack thread) in the default browser
-    /// or Slack desktop app. The Slack deep-link rewrite (jumping to the desktop
-    /// client instead of the browser) the widget does is deferred — keep the simple
-    /// `open <url>` path for now.
-    private func openSource(_ source: TaskSource) {
-        let url: String
-        switch source {
-        case .jira(_, let u):  url = u
-        case .slack(let u):    url = u
-        }
-        guard let parsed = URL(string: url) else {
-            NSLog("Helm: task source URL is unopenable: \(url)")
-            return
-        }
-        NSWorkspace.shared.open(parsed)
-    }
-
-    private func openPR(_ pr: PullRequest) {
-        guard let url = URL(string: pr.url) else {
-            NSLog("Helm: PR url is unopenable: \(pr.url)")
+    private func openURL(_ raw: String) {
+        guard let url = URL(string: raw) else {
+            NSLog("Helm: attention row url is unopenable: \(raw)")
             return
         }
         hide()
         NSWorkspace.shared.open(url)
-    }
-
-    /// Open an attention-launcher row by its concrete type — resume a session, open a PR.
-    private func openAttentionItem(_ item: any AttentionItem) {
-        if let session = item as? ChatSession { pick(session) }
-        else if let pr = item as? PullRequest { openPR(pr) }
     }
 
     // MARK: Key handling (local monitor while visible)
@@ -385,21 +313,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The new-chat picker is a modal overlay: while it's up it owns every keystroke.
         if shell.newChatActive { return handleNewChat(event, cmd: cmd, option: option) }
 
-        // ⌘N anywhere opens the picker; ⌘<digit> selects the view at that slot; ⌘O adds a
-        // folder. All global to every view — a new AppView case is reachable with no edit.
+        // ⌘N opens the picker; ⌘O adds a workspace folder.
         if cmd {
             if Int(event.keyCode) == kVK_ANSI_N { openNewChatPicker(); return true }
-            if let digit = Self.digitKeyCodes[Int(event.keyCode)], let view = AppView.forDigit(digit) {
-                shell.select(view); return true
-            }
             if Int(event.keyCode) == kVK_ANSI_O { addWorkspaceFolders(); return true }
         }
-        switch shell.view {
-        case .attention: return handleAttention(event, cmd: cmd, option: option)
-        case .sessions:  return handleSessions(event, cmd: cmd, option: option)
-        case .tasks:     return handleTasks(event, cmd: cmd, option: option)
-        case .prs:       return handlePRs(event, cmd: cmd, option: option)
-        }
+        return handleAttention(event, cmd: cmd, option: option)
     }
 
     /// Picker keys: ↵ launches a chat in the selected project, esc backs out to the view you
@@ -442,70 +361,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         default: break
         }
         return appendIfPrintable(event, cmd: cmd, to: { [weak self] in self?.attentionModel.appendQuery($0) })
-    }
-
-    private func handleSessions(_ event: NSEvent, cmd: Bool, option: Bool) -> Bool {
-        switch Int(event.keyCode) {
-        case kVK_Escape:      hide();                                      return true
-        case kVK_Return, kVK_ANSI_KeypadEnter:
-            if let s = model.selectedSession { pick(s) };   return true
-        case kVK_DownArrow:   model.clearSelection(); model.navDown();  return true
-        case kVK_UpArrow:     model.clearSelection(); model.navUp();    return true
-        case kVK_LeftArrow:   model.clearSelection(); model.navLeft();  return true
-        case kVK_RightArrow:  model.clearSelection(); model.navRight(); return true
-        case kVK_ANSI_A where cmd: model.selectAllQuery();  return true
-        case kVK_Delete:
-            if cmd {
-                if model.query.isEmpty {
-                    if !model.removeSelectedWorkspaceFolder() { NSSound.beep() }
-                } else {
-                    model.clearQuery()
-                }
-            } else if option { model.deleteWordBack() }
-            else             { model.backspaceQuery() }
-            return true
-        case kVK_ANSI_X where cmd: killSelected();          return true
-        default: break
-        }
-        return appendIfPrintable(event, cmd: cmd, to: { [weak self] in self?.model.appendQuery($0) })
-    }
-
-    private func handleTasks(_ event: NSEvent, cmd: Bool, option: Bool) -> Bool {
-        switch Int(event.keyCode) {
-        case kVK_Escape:                                            hide(); return true
-        case kVK_Return, kVK_ANSI_KeypadEnter:
-            if cmd { tasksModel.cycleSelected() }
-            else if let t = tasksModel.selectedTask { openTask(t) }
-            return true
-        case kVK_DownArrow:   tasksModel.clearSelection(); tasksModel.move(by: 1);  return true
-        case kVK_UpArrow:     tasksModel.clearSelection(); tasksModel.move(by: -1); return true
-        case kVK_ANSI_A where cmd: tasksModel.selectAllQuery();  return true
-        case kVK_Delete:
-            if cmd        { tasksModel.clearQuery() }
-            else if option { tasksModel.deleteWordBack() }
-            else           { tasksModel.backspaceQuery() }
-            return true
-        default: break
-        }
-        return appendIfPrintable(event, cmd: cmd, to: { [weak self] in self?.tasksModel.appendQuery($0) })
-    }
-
-    private func handlePRs(_ event: NSEvent, cmd: Bool, option: Bool) -> Bool {
-        switch Int(event.keyCode) {
-        case kVK_Escape:                                          hide(); return true
-        case kVK_Return, kVK_ANSI_KeypadEnter:
-            if let pr = prsModel.selectedPR { openPR(pr) };       return true
-        case kVK_DownArrow:   prsModel.clearSelection(); prsModel.move(by: 1);  return true
-        case kVK_UpArrow:     prsModel.clearSelection(); prsModel.move(by: -1); return true
-        case kVK_ANSI_A where cmd: prsModel.selectAllQuery();     return true
-        case kVK_Delete:
-            if cmd        { prsModel.clearQuery() }
-            else if option { prsModel.deleteWordBack() }
-            else           { prsModel.backspaceQuery() }
-            return true
-        default: break
-        }
-        return appendIfPrintable(event, cmd: cmd, to: { [weak self] in self?.prsModel.appendQuery($0) })
     }
 
     /// Typeahead: a printable character (no ⌘) extends the active view's filter query.

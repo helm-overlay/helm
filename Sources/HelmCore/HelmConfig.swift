@@ -25,36 +25,9 @@ public enum TerminalKind: String, Equatable, CaseIterable {
     }
 }
 
-/// Which editor opens when a task row is activated. The first element is the binary
-/// (resolved via `env`); successive elements are flags. Defaults to Zed; the user can
-/// override via `taskEditor` in `~/.config/helm/config.json` (string or array).
-public struct TaskEditor: Equatable {
-    public let argv: [String]
-
-    public static let `default` = TaskEditor(argv: ["zed"])
-
-    public init(argv: [String]) { self.argv = argv }
-
-    /// Parse from the config JSON: `"code"` → `["code"]`; `["code", "--wait"]` → same.
-    /// Empty or malformed → default.
-    public init(parsing raw: Any?) {
-        if let s = raw as? String, !s.isEmpty {
-            self.argv = s.split(separator: " ").map(String.init)
-        } else if let arr = raw as? [String], !arr.isEmpty {
-            self.argv = arr
-        } else {
-            self.argv = Self.default.argv
-        }
-    }
-}
-
 /// User config at ~/.config/helm/config.json. Missing file → all defaults.
 public struct HelmConfig: Equatable {
     public var terminal: TerminalKind
-    /// Sessions idle longer than this are hidden from the default view (still searchable).
-    /// 0 or negative disables the cutoff (show everything).
-    public var hideOlderThanDays: Int
-    public var taskEditor: TaskEditor
     /// Post a macOS notification when a watched session finishes (needs review) or blocks
     /// awaiting input, while the overlay is dismissed. Default on.
     public var notificationsEnabled: Bool
@@ -70,8 +43,7 @@ public struct HelmConfig: Equatable {
     /// `workspaceRoots` parent can't silently re-add a child the user dismissed.
     public var excludedFolders: [String]
 
-    public init(terminal: TerminalKind = .default, hideOlderThanDays: Int = 1,
-                taskEditor: TaskEditor = .default,
+    public init(terminal: TerminalKind = .default,
                 notificationsEnabled: Bool = true,
                 enabledAgents: [AgentKind] = [.claude],
                 defaultAgent: AgentKind = .claude,
@@ -80,8 +52,6 @@ public struct HelmConfig: Equatable {
                 excludedFolders: [String] = []) {
         let uniqueEnabled = Self.normalizedAgents(enabledAgents)
         self.terminal = terminal
-        self.hideOlderThanDays = hideOlderThanDays
-        self.taskEditor = taskEditor
         self.notificationsEnabled = notificationsEnabled
         self.enabledAgents = uniqueEnabled
         self.defaultAgent = uniqueEnabled.contains(defaultAgent) ? defaultAgent : uniqueEnabled[0]
@@ -117,11 +87,6 @@ public struct HelmConfig: Equatable {
             .map(\.path)
     }
 
-    /// Cutoff as a duration; 0 if disabled.
-    public var hideOlderThan: TimeInterval {
-        hideOlderThanDays > 0 ? TimeInterval(hideOlderThanDays) * 86_400 : 0
-    }
-
     public static var path: URL {
         URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent(".config/helm/config.json")
@@ -133,8 +98,6 @@ public struct HelmConfig: Equatable {
         else { return HelmConfig() }
         return HelmConfig(
             terminal: TerminalKind(parsing: obj["terminal"] as? String),
-            hideOlderThanDays: (obj["hideOlderThanDays"] as? Int) ?? HelmConfig().hideOlderThanDays,
-            taskEditor: TaskEditor(parsing: obj["taskEditor"]),
             notificationsEnabled: (obj["notificationsEnabled"] as? Bool) ?? HelmConfig().notificationsEnabled,
             enabledAgents: parseAgents(obj["enabledAgents"]),
             defaultAgent: parseAgent(obj["defaultAgent"]) ?? .claude,

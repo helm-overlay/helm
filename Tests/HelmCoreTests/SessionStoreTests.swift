@@ -60,14 +60,6 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(SessionStore.ageLabel(14 * 86400),  "2w")
     }
 
-    func testIsOlderThan() {
-        let now = Date(timeIntervalSince1970: 1_000_000)
-        let week: TimeInterval = 7 * 86400
-        XCTAssertFalse(SessionStore.isOlderThan(week, lastActive: now.addingTimeInterval(-3 * 86400), now: now))
-        XCTAssertTrue(SessionStore.isOlderThan(week, lastActive: now.addingTimeInterval(-8 * 86400), now: now))
-        XCTAssertFalse(SessionStore.isOlderThan(0, lastActive: .distantPast, now: now))   // disabled
-    }
-
     // MARK: state derivation
 
     func testStateDerivation() {

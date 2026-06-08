@@ -1,7 +1,7 @@
 import SwiftUI
 
-// Leaf views shared by the sessions and tasks overlays. Kept here (rather than copied
-// privately into each view) so the two lists stay visually identical by construction.
+// Leaf views shared across the overlay's list views. Kept here (rather than copied
+// privately into each view) so the lists stay visually identical by construction.
 
 /// A vertical-bar insertion caret that blinks on a fixed cadence, phased so it is
 /// solid-on at `anchor` (the last edit) — the caret never blinks off mid-keystroke.

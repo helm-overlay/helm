@@ -1,90 +1,96 @@
 import SwiftUI
 import HelmCore
 
-/// State for the attention launcher — the small default view. Two urgency-ranked sections:
-/// sessions that want you (needs-input / review), then PRs that want you (review-requested /
-/// CI-failed / changes-requested / ready). Currently-working sessions trail in a dimmed
-/// section so the launcher doubles as a "what's live" glance.
+/// One source's rows in the attention launcher, rendered as a titled section.
+struct FeedSection: Identifiable {
+    let id: String            // source id
+    let title: String         // section header
+    let items: [any AttentionItem]
+}
+
+/// State for the attention launcher — the default view. Source-driven: it holds a list of
+/// `AttentionSource`s and renders each one's promoted rows as a titled section, urgency-ranked.
+/// Adding a row type means adding a source to the list — nothing here changes.
 ///
-/// Sessions and PRs refresh on independent cadences — sessions every ~1.5s (cheap local
-/// reads, and their state flips fast) and PRs every 15s (one network round-trip) — merged
-/// from per-source caches so a slow PR fetch never holds back live session state.
+/// Each source refreshes on its own cadence (`refreshPolicy`) into its own cache slice, so a
+/// slow network source (PRs, 15s) never holds back a fast local one (sessions, 1.5s). The VM
+/// owns this per-source concurrency itself rather than awaiting all sources together.
 @MainActor
 final class AttentionListViewModel: ObservableObject {
-    /// Attention sessions first (needs-input, then review), busy/working sessions last —
-    /// one section, ranked by urgency, like the old per-project lists.
-    @Published private(set) var sessions: [ChatSession] = []
-    @Published private(set) var attentionPRs: [PullRequest] = []        // rank ≤ 1
+    /// One section per source with promoted rows, in source-registration order.
+    @Published private(set) var sections: [FeedSection] = []
     @Published private(set) var query: String = ""
     @Published private(set) var querySelected: Bool = false
     @Published private(set) var lastEdit: Date = Date()
     @Published private(set) var loading: Bool = false
     @Published var selection: String?                                   // AttentionItem.id
 
-    private var cachedSessions: [ChatSession] = []
-    private var cachedPRs: [PullRequest] = []
-    private var loadedSessions = false
-    private var loadedPRs = false
-
-    private var sessionTicker: Timer?
-    private var prTicker: Timer?
-    private var reloadingSessions = false
-    private var reloadingPRs = false
+    private let sources: [any AttentionSource]
+    private var cache: [String: [any AttentionItem]] = [:]              // keyed by source.id
+    private var timers: [String: Timer] = [:]
+    private var reloading: Set<String> = []                             // per-source reentrancy guard
+    private var loaded: Set<String> = []                                // sources that have reported once
     /// Sessions we've killed but whose process may still be exiting — suppressed from the
     /// list until a reload confirms them gone, so a mid-teardown poll can't resurrect them.
     private var killed: Set<String> = []
 
-    var attentionCount: Int { sessions.filter { $0.reason.wantsAttention }.count + attentionPRs.count }
-    var workingCount: Int { sessions.filter { $0.reason == .live }.count }
+    /// The registration point: add an integration by adding its source here.
+    init(sources: [any AttentionSource] = [SessionFeedSource(), PRSource()]) {
+        self.sources = sources
+    }
+
+    var attentionCount: Int { flat.filter { $0.reason.wantsAttention }.count }
+    var workingCount: Int { flat.filter { $0.reason == .live }.count }
 
     // MARK: Visibility
 
+    /// Start each source on its declared cadence: `.interval` sources get a timer; `.push`
+    /// sources drive their own updates via `start(onChange:)`; `.onSummonOnly` refresh only
+    /// on `reloadInBackground`.
     func startTicking() {
-        sessionTicker?.invalidate()
-        sessionTicker = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.reloadSessions() }
-        }
-        prTicker?.invalidate()
-        prTicker = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.reloadPRs() }
+        stopTicking()
+        for source in sources {
+            switch source.refreshPolicy {
+            case .interval(let seconds):
+                timers[source.id] = Timer.scheduledTimer(withTimeInterval: seconds, repeats: true) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.reload(source) }
+                }
+            case .push:
+                source.start { [weak self] items in
+                    _Concurrency.Task { @MainActor in self?.ingest(items, from: source) }
+                }
+            case .onSummonOnly:
+                break
+            }
         }
     }
 
     func stopTicking() {
-        sessionTicker?.invalidate(); sessionTicker = nil
-        prTicker?.invalidate(); prTicker = nil
+        timers.values.forEach { $0.invalidate() }
+        timers.removeAll()
+        sources.forEach { $0.stop() }
     }
 
     func reloadInBackground() {
-        loading = !loadedSessions && !loadedPRs
-        reloadSessions()
-        reloadPRs()
+        loading = loaded.isEmpty
+        sources.forEach { reload($0) }
     }
 
     // MARK: Reload (per source)
 
-    private func reloadSessions() {
-        guard !reloadingSessions else { return }
-        reloadingSessions = true
+    private func reload(_ source: any AttentionSource) {
+        guard !reloading.contains(source.id) else { return }
+        reloading.insert(source.id)
         _Concurrency.Task.detached(priority: .utility) {
-            let s = SessionStore().load()
-            await self.ingestSessions(s)
+            let items = await source.allItems()
+            await self.ingest(items, from: source)
         }
     }
 
-    private func reloadPRs() {
-        guard !reloadingPRs else { return }
-        reloadingPRs = true
-        _Concurrency.Task.detached(priority: .utility) {
-            let p = PRSource().fetchAll()
-            await self.ingestPRs(p)
-        }
-    }
-
-    private func ingestSessions(_ s: [ChatSession]) {
-        reloadingSessions = false
-        loadedSessions = true
-        cachedSessions = s.filter { !killed.contains($0.id) }
+    private func ingest(_ items: [any AttentionItem], from source: any AttentionSource) {
+        reloading.remove(source.id)
+        loaded.insert(source.id)
+        cache[source.id] = items.filter { !killed.contains($0.id) }
         recompute()
     }
 
@@ -94,26 +100,26 @@ final class AttentionListViewModel: ObservableObject {
     /// thread, and the row stays suppressed until that completes so a poll can't bring it back.
     func kill(_ session: ChatSession) {
         guard let pid = session.pid else { return }
+        let owner = sourceID(holding: session.id)
         killed.insert(session.id)
-        cachedSessions.removeAll { $0.id == session.id }
+        for key in cache.keys { cache[key]?.removeAll { $0.id == session.id } }
         recompute()
         _Concurrency.Task.detached(priority: .userInitiated) {
             SessionStore.clearState(agent: session.agent, sessionId: session.sessionId)
             SessionStore.terminateAndWait(pid)
-            await self.finishKill(session.id)
+            await self.finishKill(session.id, owner: owner)
         }
     }
 
-    private func finishKill(_ id: String) {
+    private func finishKill(_ id: String, owner: String?) {
         killed.remove(id)
-        reloadSessions()
+        if let owner, let source = sources.first(where: { $0.id == owner }) { reload(source) }
+        else { reloadInBackground() }
     }
 
-    private func ingestPRs(_ p: [PullRequest]) {
-        reloadingPRs = false
-        loadedPRs = true
-        cachedPRs = p
-        recompute()
+    /// Which source's cache slice currently holds `id` — so a kill reloads only that source.
+    private func sourceID(holding id: String) -> String? {
+        cache.first { $0.value.contains { $0.id == id } }?.key
     }
 
     // MARK: Merge / filter
@@ -121,34 +127,21 @@ final class AttentionListViewModel: ObservableObject {
     private func recompute() {
         loading = false
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-
-        // Attention (rank ≤ 1) and working (rank 2 .live) sessions in one list, urgency-ordered
-        // so working naturally falls to the bottom. Cold sessions never appear here.
-        let sess = cachedSessions
-            .filter { ($0.reason.wantsAttention || $0.reason == .live) && Self.matches($0, query: q) }
-            .sorted(by: byUrgency)
-        let prs = cachedPRs
-            .filter { $0.reason.wantsAttention && Self.matches($0, query: q) }
-            .sorted(by: byUrgency)
-
+        let searching = !q.isEmpty
+        // At rest each source contributes its promoted rows (the attention feed). The moment
+        // you type, the gate drops and the full cached inventory is searched instead, so cold
+        // sessions and non-urgent PRs surface — resting = push, expansion = pull. Either way,
+        // rows rank by urgency (loudest first, then newest); empty sections drop.
+        let next: [FeedSection] = sources.compactMap { source in
+            let pool = cache[source.id] ?? []
+            let rows = (searching ? pool.filter { $0.matches(q) } : pool.filter(source.promotes))
+                .sorted(by: AttentionFeed.precedes)
+            return rows.isEmpty ? nil : FeedSection(id: source.id, title: source.title, items: rows)
+        }
         withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
-            sessions = sess
-            attentionPRs = prs
+            sections = next
             reconcileSelection()
         }
-    }
-
-    /// Louder (lower rank) first, then newest — within a single type's section.
-    private func byUrgency<T: AttentionItem>(_ a: T, _ b: T) -> Bool {
-        a.reason.rank != b.reason.rank ? a.reason.rank < b.reason.rank : a.lastActive > b.lastActive
-    }
-
-    /// Type-agnostic match over the contract — title (label / PR title) and subtitle
-    /// (project·branch / repo#number).
-    static func matches(_ item: any AttentionItem, query q: String) -> Bool {
-        guard !q.isEmpty else { return true }
-        return item.title.lowercased().contains(q)
-            || (item.subtitle?.lowercased().contains(q) ?? false)
     }
 
     private func reconcileSelection() {
@@ -191,13 +184,16 @@ final class AttentionListViewModel: ObservableObject {
 
     // MARK: Selection (arrows)
 
-    /// Sessions (attention then working), then PRs — the visible top-to-bottom order.
-    private var flat: [any AttentionItem] {
-        sessions.map { $0 as any AttentionItem }
-            + attentionPRs.map { $0 as any AttentionItem }
-    }
+    /// Sources top-to-bottom, each source's rows in display order — the visible flat order.
+    private var flat: [any AttentionItem] { sections.flatMap(\.items) }
 
     var selectedItem: (any AttentionItem)? { flat.first { $0.id == selection } }
+
+    /// Every cached session row (incl. cold), for seeding the new-chat picker's project list
+    /// without a fresh filesystem read. Drawn from the source caches, type-filtered.
+    var cachedSessions: [ChatSession] {
+        cache.values.flatMap { $0 }.compactMap { $0 as? ChatSession }
+    }
 
     func move(by delta: Int) {
         let rows = flat
@@ -210,8 +206,6 @@ final class AttentionListViewModel: ObservableObject {
     // MARK: Layout
 
     /// Visible row + section-header count, for sizing the launcher panel to its content.
-    var visibleRowCount: Int { sessions.count + attentionPRs.count }
-    var visibleSectionCount: Int {
-        [!sessions.isEmpty, !attentionPRs.isEmpty].filter { $0 }.count
-    }
+    var visibleRowCount: Int { flat.count }
+    var visibleSectionCount: Int { sections.count }
 }
