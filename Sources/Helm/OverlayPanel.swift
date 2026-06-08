@@ -33,7 +33,7 @@ final class OverlayPanel: NSPanel {
                    backing: .buffered, defer: false)
         isFloatingPanel = true
         level = .modalPanel
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
