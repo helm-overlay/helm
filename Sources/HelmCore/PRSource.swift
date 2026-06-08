@@ -15,9 +15,22 @@ public struct PRSource: AttentionSource {
     let runGh: Runner
     /// Cap per bucket so a prolific account can't stall summon.
     let limit: Int
+    /// A PR untouched (no `updatedAt` change) for longer than this drops out of the feed.
+    let staleAfter: TimeInterval
+    /// How far before the cutoff a still-promoted PR is flagged "expiring" by the view.
+    let expiringWithin: TimeInterval
+    /// Clock, evaluated per call so a long-lived source stays current. Injected for tests.
+    let now: () -> Date
 
-    public init(limit: Int = 50, runGh: @escaping Runner = PRSource.shellOut) {
+    public init(limit: Int = 50,
+                staleAfter: TimeInterval = 7 * 24 * 3600,
+                expiringWithin: TimeInterval = 24 * 3600,
+                now: @escaping () -> Date = { Date() },
+                runGh: @escaping Runner = PRSource.shellOut) {
         self.limit = limit
+        self.staleAfter = staleAfter
+        self.expiringWithin = expiringWithin
+        self.now = now
         self.runGh = runGh
     }
 
@@ -30,8 +43,22 @@ public struct PRSource: AttentionSource {
 
     public func allItems() async -> [any AttentionItem] { fetchAll() }
 
-    /// Action-required / come-look PRs reach the feed; drafts and non-urgent PRs are inventory-only.
-    public func promotes(_ item: any AttentionItem) -> Bool { item.reason.wantsAttention }
+    /// Action-required / come-look PRs reach the feed — unless they've gone stale (untouched
+    /// past `staleAfter`). Drafts and non-urgent PRs are inventory-only regardless.
+    public func promotes(_ item: any AttentionItem) -> Bool {
+        item.reason.wantsAttention && age(item) <= staleAfter
+    }
+
+    /// A promoted PR in its final `expiringWithin` before the staleness cutoff — about to drop
+    /// off the feed, so the view flags it.
+    public func expiringSoon(_ item: any AttentionItem) -> Bool {
+        item.reason.wantsAttention && age(item) > staleAfter - expiringWithin && age(item) <= staleAfter
+    }
+
+    /// Time since the PR was last touched (its `updatedAt`).
+    private func age(_ item: any AttentionItem) -> TimeInterval {
+        now().timeIntervalSince(item.lastActive)
+    }
 
     // MARK: Fetch
 

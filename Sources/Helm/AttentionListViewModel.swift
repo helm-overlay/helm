@@ -1,11 +1,18 @@
 import SwiftUI
 import HelmCore
 
+/// One displayed row plus view-only flags the model computed for it.
+struct FeedRow: Identifiable {
+    let item: any AttentionItem
+    let expiringSoon: Bool    // about to drop off the feed (source.expiringSoon)
+    var id: String { item.id }
+}
+
 /// One source's rows in the attention launcher, rendered as a titled section.
 struct FeedSection: Identifiable {
     let id: String            // source id
     let title: String         // section header
-    let items: [any AttentionItem]
+    let rows: [FeedRow]
 }
 
 /// State for the attention launcher — the default view. Source-driven: it holds a list of
@@ -134,9 +141,10 @@ final class AttentionListViewModel: ObservableObject {
         // rows rank by urgency (loudest first, then newest); empty sections drop.
         let next: [FeedSection] = sources.compactMap { source in
             let pool = cache[source.id] ?? []
-            let rows = (searching ? pool.filter { $0.matches(q) } : pool.filter(source.promotes))
+            let visible = (searching ? pool.filter { $0.matches(q) } : pool.filter(source.promotes))
                 .sorted(by: AttentionFeed.precedes)
-            return rows.isEmpty ? nil : FeedSection(id: source.id, title: source.title, items: rows)
+            let rows = visible.map { FeedRow(item: $0, expiringSoon: !searching && source.expiringSoon($0)) }
+            return rows.isEmpty ? nil : FeedSection(id: source.id, title: source.title, rows: rows)
         }
         withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
             sections = next
@@ -185,7 +193,7 @@ final class AttentionListViewModel: ObservableObject {
     // MARK: Selection (arrows)
 
     /// Sources top-to-bottom, each source's rows in display order — the visible flat order.
-    private var flat: [any AttentionItem] { sections.flatMap(\.items) }
+    private var flat: [any AttentionItem] { sections.flatMap(\.rows).map(\.item) }
 
     var selectedItem: (any AttentionItem)? { flat.first { $0.id == selection } }
 

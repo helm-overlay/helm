@@ -23,6 +23,10 @@ public protocol AttentionSource {
     /// rows but not dead ones; `PRSource` promotes action-required / come-look PRs but not drafts.
     func promotes(_ item: any AttentionItem) -> Bool
 
+    /// A promoted row that's about to drop out of the feed — the view flags it (e.g. a PR a
+    /// day from its staleness cutoff). Default `false`: most sources never expire their rows.
+    func expiringSoon(_ item: any AttentionItem) -> Bool
+
     /// Re-fetch a single row — e.g. after you act on it. Default: `allItems()` then pick by id;
     /// a source with a cheaper per-row path (one PR instead of the list) overrides this.
     func refresh(_ item: any AttentionItem) async -> (any AttentionItem)?
@@ -48,6 +52,8 @@ public enum RefreshPolicy: Equatable {
 }
 
 public extension AttentionSource {
+    func expiringSoon(_ item: any AttentionItem) -> Bool { false }
+
     func refresh(_ item: any AttentionItem) async -> (any AttentionItem)? {
         await allItems().first { $0.id == item.id }
     }

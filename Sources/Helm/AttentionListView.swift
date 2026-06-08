@@ -64,9 +64,10 @@ struct AttentionListView: View {
                     // which would collide across sections and reuse a moved row's stale view.
                     ForEach(model.sections) { section in
                         SectionHeader(title: section.title)
-                        ForEach(section.items, id: \.id) { item in
-                            AttentionRow(item: item, dimmed: item.reason == .live,
-                                         selected: item.id == model.selection, onOpen: { onOpen(item) })
+                        ForEach(section.rows) { row in
+                            AttentionRow(item: row.item, dimmed: row.item.reason == .live,
+                                         expiringSoon: row.expiringSoon,
+                                         selected: row.item.id == model.selection, onOpen: { onOpen(row.item) })
                                 .transition(.rowEnterLeave)
                         }
                     }
@@ -111,6 +112,7 @@ struct AttentionListView: View {
 private struct AttentionRow: View {
     let item: any AttentionItem
     let dimmed: Bool
+    let expiringSoon: Bool
     let selected: Bool
     let onOpen: () -> Void
 
@@ -144,6 +146,16 @@ private struct AttentionRow: View {
         .padding(.horizontal, 12).padding(.vertical, 7)
         .background(selected ? Color.white.opacity(0.09) : .clear,
                     in: RoundedRectangle(cornerRadius: 8))
+        // About to drop off the feed: a thin amber bar on the leading edge.
+        .overlay(alignment: .leading) {
+            if expiringSoon {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(PROrbitIndicator.amber)
+                    .frame(width: 3)
+                    .padding(.vertical, 6)
+                    .padding(.leading, 1)
+            }
+        }
         .padding(.horizontal, 8)
     }
 
