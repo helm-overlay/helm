@@ -23,14 +23,15 @@ public struct PRSource: AttentionSource {
 
     // MARK: AttentionSource
 
-    public func attentionItems() async -> [any AttentionItem] {
-        fetchAll().filter { $0.reason.wantsAttention }
-    }
+    public var id: String { "prs" }
+    public var title: String { "PULL REQUESTS" }
+    /// Network-bound: poll slowly. A fresh fetch also runs on every summon.
+    public var refreshPolicy: RefreshPolicy { .interval(15) }
 
-    public func inventory(matching query: String) async -> [any AttentionItem] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        return fetchAll().filter { Self.matches($0, query: q) }
-    }
+    public func allItems() async -> [any AttentionItem] { fetchAll() }
+
+    /// Action-required / come-look PRs reach the feed; drafts and non-urgent PRs are inventory-only.
+    public func promotes(_ item: any AttentionItem) -> Bool { item.reason.wantsAttention }
 
     // MARK: Fetch
 

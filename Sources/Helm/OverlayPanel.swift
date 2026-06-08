@@ -4,15 +4,13 @@ import Cocoa
 /// screen (Raycast/Spotlight style). Becomes key (so it receives keystrokes) without
 /// activating the app — focus returns to the terminal the moment it's ordered out.
 ///
-/// The panel has two sizes. The **launcher** (attention view) is compact and fits its
-/// content — a small list of what wants you, like Raycast at rest. Every other view uses
-/// the **generous** size, which holds the full master-detail layouts. Switching views
-/// resizes the panel, anchored at a fixed top edge so it grows/shrinks downward.
+/// Sizes to its content: a compact **launcher** (the attention view) — a small list of what
+/// wants you, like Raycast at rest — and a slightly narrower **new-chat picker** overlay.
+/// Anchored at a fixed top edge so it grows/shrinks downward.
 final class OverlayPanel: NSPanel {
-    private let widthFraction: CGFloat = 0.46
-    private let heightFraction: CGFloat = 0.62
-    private let minWidth: CGFloat = 820, maxWidth: CGFloat = 1100
-    private let minHeight: CGFloat = 560, maxHeight: CGFloat = 820
+    /// Initial seed size before the first content-driven resize.
+    private let minWidth: CGFloat = 820
+    private let minHeight: CGFloat = 560
 
     /// Compact launcher: a fixed, narrower width; height fits content up to a cap.
     private let launcherWidth: CGFloat = 700
@@ -56,14 +54,6 @@ final class OverlayPanel: NSPanel {
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
-
-    /// The generous size — every view except the launcher.
-    func setGenerousFrame() {
-        guard let visible = currentVisibleFrame() else { return }
-        let w = min(maxWidth, max(minWidth, visible.width * widthFraction))
-        let h = min(maxHeight, max(minHeight, visible.height * heightFraction))
-        apply(width: w, height: h, in: visible)
-    }
 
     /// The compact launcher size — narrow, height fit to `contentHeight` up to a cap.
     func setLauncherFrame(contentHeight: CGFloat) {

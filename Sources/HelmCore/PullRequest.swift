@@ -26,9 +26,12 @@ public struct PullRequest: AttentionItem, Equatable {
     public var id: String { "pr:\(repo)#\(number)" }
     public var badge: AttentionBadge { .pullRequest }
     public var title: String { titleText }
+    public var context: String { repo.split(separator: "/").last.map(String.init) ?? repo }
     public var subtitle: String? { "\(repo)#\(number)" }
     public var lastActive: Date { updatedAt }
     public var primaryAction: AttentionAction { .openURL(url) }
+
+    public func matches(_ query: String) -> Bool { PRSource.matches(self, query: query) }
 
     /// A PR review request always wants you. Among your own PRs, a red check or a
     /// changes-requested review demands action; an approved+green one is ready to merge;

@@ -76,8 +76,6 @@ Extend `~/.config/helm/config.json` with agent settings:
 ```json
 {
   "terminal": "terminal",
-  "hideOlderThanDays": 1,
-  "taskEditor": ["zed"],
   "enabledAgents": ["claude", "pi"],
   "defaultAgent": "pi"
 }

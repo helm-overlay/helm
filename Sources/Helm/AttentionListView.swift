@@ -8,7 +8,6 @@ import HelmCore
 /// open a PR in the browser) via the item's own primary action.
 struct AttentionListView: View {
     @ObservedObject var model: AttentionListViewModel
-    @ObservedObject var shell: AppShellModel
     let onOpen: (any AttentionItem) -> Void
 
     var body: some View {
@@ -59,24 +58,15 @@ struct AttentionListView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    // One SESSIONS section: attention rows first, working sessions dimmed at
-                    // the bottom (urgency-ordered in the model). Each ForEach owns its rows'
-                    // identity (id: \.id) — no explicit .id() on the row, which would collide
-                    // across sections and make SwiftUI reuse a moved row's stale view/icon.
-                    if !model.sessions.isEmpty {
-                        SectionHeader(title: "SESSIONS")
-                        ForEach(model.sessions, id: \.id) { s in
-                            AttentionRow(item: s, dimmed: s.reason == .live,
-                                         selected: s.id == model.selection, onOpen: { onOpen(s) })
-                                .transition(.rowEnterLeave)
-                        }
-                    }
-
-                    if !model.attentionPRs.isEmpty {
-                        SectionHeader(title: "PULL REQUESTS")
-                        ForEach(model.attentionPRs, id: \.id) { pr in
-                            AttentionRow(item: pr, dimmed: false,
-                                         selected: pr.id == model.selection, onOpen: { onOpen(pr) })
+                    // One titled section per source, urgency-ordered in the model so working
+                    // rows trail dimmed at the bottom. The inner ForEach owns each row's
+                    // identity (id: \.id, globally unique) — no explicit .id() on the row,
+                    // which would collide across sections and reuse a moved row's stale view.
+                    ForEach(model.sections) { section in
+                        SectionHeader(title: section.title)
+                        ForEach(section.items, id: \.id) { item in
+                            AttentionRow(item: item, dimmed: item.reason == .live,
+                                         selected: item.id == model.selection, onOpen: { onOpen(item) })
                                 .transition(.rowEnterLeave)
                         }
                     }
@@ -104,10 +94,10 @@ struct AttentionListView: View {
     private var footer: some View {
         HStack(spacing: 16) {
             HintBar(hints: [Hint(key: "↵", label: "open"),
+                            Hint(key: "⌘N", label: "new"),
                             Hint(key: "⌘X", label: "kill"),
                             Hint(key: "esc", label: "dismiss")])
             Spacer(minLength: 12)
-            ModeSwitcher(shell: shell)
         }
         .padding(.horizontal, 16).padding(.vertical, 9)
     }
@@ -166,11 +156,7 @@ private struct AttentionRow: View {
     }
 
     /// Project for a session, repo basename for a PR — the "where" that anchors the row.
-    private var context: String {
-        if let s = item as? ChatSession { return s.project }
-        if let pr = item as? PullRequest { return pr.repo.split(separator: "/").last.map(String.init) ?? pr.repo }
-        return ""
-    }
+    private var context: String { item.context }
 
     private var reasonLabel: String { AttentionPalette.label(item.reason) }
     private var tint: Color { AttentionPalette.color(item.reason) }

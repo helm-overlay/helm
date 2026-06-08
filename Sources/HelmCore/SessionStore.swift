@@ -171,11 +171,6 @@ public struct SessionStore {
         }
     }
 
-    /// Whether a session is past the "hide old sessions" cutoff (cutoff <= 0 disables).
-    public static func isOlderThan(_ cutoff: TimeInterval, lastActive: Date, now: Date) -> Bool {
-        cutoff > 0 && now.timeIntervalSince(lastActive) > cutoff
-    }
-
     /// Search-first matching: a session matches a query if the query is a subsequence
     /// (fzf-style fuzzy) of its label, project, branch, or cwd. Query assumed lowercased.
     public static func matches(_ s: ChatSession, query q: String) -> Bool {

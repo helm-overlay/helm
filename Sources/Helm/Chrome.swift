@@ -29,32 +29,3 @@ struct HintBar: View {
         .fixedSize(horizontal: true, vertical: false)
     }
 }
-
-/// Persistent mode tabs (Sessions · Tasks · …), built from `AppView.allCases`. The active
-/// mode is filled; clicking one (or pressing its ⌘-digit) switches. A new `AppView` case
-/// adds a pill here automatically — nothing to wire.
-struct ModeSwitcher: View {
-    @ObservedObject var shell: AppShellModel
-
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(AppView.allCases, id: \.self) { view in
-                let active = shell.view == view
-                Button { shell.select(view) } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: view.symbol).font(.system(size: 10, weight: .semibold))
-                        Text(view.title).font(.system(size: 11, weight: active ? .semibold : .regular))
-                        Text(verbatim: "⌘\(view.shortcutDigit)").font(.system(size: 9)).foregroundStyle(.tertiary)
-                    }
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .foregroundStyle(active ? .primary : .secondary)
-                    .padding(.horizontal, 7).padding(.vertical, 2)
-                    .background(active ? Color.white.opacity(0.12) : .clear, in: Capsule())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .focusEffectDisabled()   // clicking a pill shouldn't leave the keyboard focus ring on it
-    }
-}

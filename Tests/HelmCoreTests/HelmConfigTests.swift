@@ -23,22 +23,10 @@ final class HelmConfigTests: XCTestCase {
     func testLoadReadsTerminal() throws {
         let url = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("helm-cfg-\(UUID()).json")
-        try #"{"terminal":"iterm","hideOlderThanDays":14}"#.write(to: url, atomically: true, encoding: .utf8)
+        try #"{"terminal":"iterm"}"#.write(to: url, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: url) }
         let cfg = HelmConfig.load(from: url)
         XCTAssertEqual(cfg.terminal, .iterm)
-        XCTAssertEqual(cfg.hideOlderThanDays, 14)
-        XCTAssertEqual(cfg.hideOlderThan, 14 * 86_400)
-    }
-
-    func testHideOlderThanDefaultsToOneDay() {
-        XCTAssertEqual(HelmConfig().hideOlderThanDays, 1)
-        XCTAssertEqual(HelmConfig().hideOlderThan, 86_400)
-    }
-
-    func testHideOlderThanDisabledWhenNonPositive() {
-        XCTAssertEqual(HelmConfig(hideOlderThanDays: 0).hideOlderThan, 0)
-        XCTAssertEqual(HelmConfig(hideOlderThanDays: -1).hideOlderThan, 0)
     }
 
     func testAgentDefaultsPreserveClaudeOnly() {
