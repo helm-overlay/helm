@@ -59,13 +59,13 @@ struct AttentionListView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     // One titled section per source, urgency-ordered in the model so working
-                    // rows trail dimmed at the bottom. The inner ForEach owns each row's
+                    // rows trail at the bottom. The inner ForEach owns each row's
                     // identity (id: \.id, globally unique) — no explicit .id() on the row,
                     // which would collide across sections and reuse a moved row's stale view.
                     ForEach(model.sections) { section in
                         SectionHeader(title: section.title)
                         ForEach(section.rows) { row in
-                            AttentionRow(item: row.item, dimmed: row.item.reason == .live,
+                            AttentionRow(item: row.item,
                                          expiringSoon: row.expiringSoon,
                                          selected: row.item.id == model.selection, onOpen: { onOpen(row.item) })
                                 .transition(.rowEnterLeave)
@@ -111,7 +111,6 @@ struct AttentionListView: View {
 /// title, and a reason chip tinted to the urgency.
 private struct AttentionRow: View {
     let item: any AttentionItem
-    let dimmed: Bool
     let expiringSoon: Bool
     let selected: Bool
     let onOpen: () -> Void
@@ -119,17 +118,16 @@ private struct AttentionRow: View {
     var body: some View {
         HStack(spacing: 11) {
             indicator
-                .opacity(dimmed ? 0.65 : 1)
 
             Text(context)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(dimmed ? AnyShapeStyle(.secondary) : AnyShapeStyle(tint))
+                .foregroundStyle(tint)
                 .lineLimit(1)
                 .frame(width: 128, alignment: .leading)
 
             Text(item.title)
                 .font(.system(size: 13))
-                .foregroundStyle(dimmed ? .secondary : .primary)
+                .foregroundStyle(.primary)
                 .lineLimit(1)
                 .layoutPriority(1)
 
@@ -137,7 +135,7 @@ private struct AttentionRow: View {
 
             Text(reasonLabel)
                 .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(dimmed ? AnyShapeStyle(.tertiary) : AnyShapeStyle(tint))
+                .foregroundStyle(tint)
                 .lineLimit(1)
                 .frame(width: 96, alignment: .trailing)
         }
