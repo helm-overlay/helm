@@ -33,19 +33,30 @@ enum TerminalDispatcher {
         }
     }
 
-    /// Whether `pid`'s session is the one you're currently looking at: the configured
-    /// terminal is frontmost AND its active tab/session owns `pid`'s controlling tty. Used to
-    /// suppress a notification for a session you're already watching. Returns false on any
-    /// uncertainty (no tty, terminal not running, AppleScript error) so we'd rather notify
-    /// than wrongly stay silent. The `is running` guard keeps this from launching the
-    /// terminal just to ask.
+    /// Whether `pid`'s session is one you can currently see: the configured terminal is
+    /// frontmost AND `pid`'s controlling tty belongs to a *visible* pane of the front
+    /// tab/window. For iTerm that's any split pane of the current tab — a session sitting in a
+    /// pane you can see counts, even when a sibling pane holds keyboard focus. Terminal has no
+    /// scriptable panes, so its selected tab's tty is the unit. Used to suppress a
+    /// notification for a session you're already watching. Returns false on any uncertainty
+    /// (no tty, terminal not running, AppleScript error) so we'd rather notify than wrongly
+    /// stay silent. The `is running` guard keeps this from launching the terminal just to ask.
     static func isSessionFocused(pid: Int32?) -> Bool {
         guard let pid, let tty = ttyForPID(pid) else { return false }
         let app = HelmConfig.load().terminal.appName
-        let activeTTY: String
+        let ttyLiteral = appleScriptString(tty)
+        let matchClause: String
         switch HelmConfig.load().terminal {
-        case .iterm:    activeTTY = "tty of current session of current window"
-        case .terminal: activeTTY = "tty of selected tab of front window"
+        case .iterm:
+            matchClause = """
+                    repeat with s in sessions of current tab of current window
+                        if (tty of s) is \(ttyLiteral) then return "1"
+                    end repeat
+            """
+        case .terminal:
+            matchClause = """
+                    if (tty of selected tab of front window) is \(ttyLiteral) then return "1"
+            """
         }
         let script = """
         if application \(appleScriptString(app)) is running then
@@ -53,7 +64,7 @@ enum TerminalDispatcher {
                 if not frontmost then return "0"
                 if (count of windows) = 0 then return "0"
                 try
-                    if (\(activeTTY)) is \(appleScriptString(tty)) then return "1"
+        \(matchClause)
                 end try
             end tell
         end if
