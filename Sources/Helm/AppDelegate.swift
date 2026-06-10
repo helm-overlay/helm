@@ -359,7 +359,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case kVK_ANSI_A where cmd: attentionModel.selectAllQuery();  return true
         case kVK_ANSI_X where cmd: killSelectedAttention();         return true
         case kVK_Delete:
-            if cmd        { attentionModel.clearQuery() }
+            // ⌘⌫ depends on what's active: clear the query while you're searching, otherwise
+            // terminate the highlighted row (session kill / building-job stop).
+            if cmd        { if attentionModel.query.isEmpty { killSelectedAttention() } else { attentionModel.clearQuery() } }
             else if option { attentionModel.deleteWordBack() }
             else           { attentionModel.backspaceQuery() }
             return true

@@ -114,10 +114,23 @@ public struct JenkinsSource: AttentionSource {
                                      env: [String: String] = ProcessInfo.processInfo.environment,
                                      tokenFile: URL = JenkinsSource.tokenFile) -> Config? {
         guard let user = config.jenkinsUser, !user.isEmpty,
-              !config.jenkinsJobs.isEmpty,
               let token = resolveToken(env: env, file: tokenFile)
         else { return nil }
-        return Config(user: user, token: token, jobURLs: config.jenkinsJobs)
+        let jobURLs = config.jenkinsJobs.compactMap { absoluteJobURL($0, base: config.jenkinsURL) }
+        guard !jobURLs.isEmpty else { return nil }
+        return Config(user: user, token: token, jobURLs: jobURLs)
+    }
+
+    /// Resolve a `jenkinsJobs` entry to an absolute job URL: an entry that already carries a
+    /// scheme is used as-is; otherwise it's treated as a path joined onto `jenkinsURL`. Nil when
+    /// an entry is relative but no base host is configured — so a typo can't silently hit nothing.
+    static func absoluteJobURL(_ entry: String, base: String?) -> String? {
+        let entry = entry.trimmingCharacters(in: .whitespaces)
+        guard !entry.isEmpty else { return nil }
+        if entry.hasPrefix("http://") || entry.hasPrefix("https://") { return entry }
+        guard let base, !base.isEmpty else { return nil }
+        let host = base.hasSuffix("/") ? String(base.dropLast()) : base
+        return host + (entry.hasPrefix("/") ? entry : "/" + entry)
     }
 
     /// The API token, from `HELM_JENKINS_TOKEN` if set (override, for terminal/CI launches),

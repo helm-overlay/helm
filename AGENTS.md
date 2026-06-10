@@ -81,9 +81,11 @@ Jenkins source inputs:
   The file is the primary path because a Dock-launched GUI app inherits no shell environment, and
   a plain file survives `bin/dev` rebuilds — unlike a Keychain item, whose ACL is gated on this
   ad-hoc-signed binary's identity (which changes every rebuild).
-- `jenkinsJobs` is a whitelist of full job URLs. Polling the whitelist (rather than scanning the
-  instance) bounds the fan-out: a running build isn't in any per-user RSS feed yet and Jenkins has
-  no cheap per-user "running builds" endpoint, so the curated list is what keeps this cheap.
+- `jenkinsJobs` is a whitelist of jobs. Each entry is either a full job URL or a host-relative
+  path joined onto `jenkinsURL` (`JenkinsSource.absoluteJobURL`); a relative entry with no
+  `jenkinsURL` set is dropped. Polling the whitelist (rather than scanning the instance) bounds the
+  fan-out: a running build isn't in any per-user RSS feed yet and Jenkins has no cheap per-user
+  "running builds" endpoint, so the curated list is what keeps this cheap.
 - Per job, `JenkinsSource` keeps *your latest* build — the highest-numbered build whose trigger
   cause `userId` matches `jenkinsUser` (so a coworker's newer run doesn't mask yours). Building →
   a dimmed `.live` row (⌘X stops it via `POST <build>/stop`); finished within 24h → failed/unstable

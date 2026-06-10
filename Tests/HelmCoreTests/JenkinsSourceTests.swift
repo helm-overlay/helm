@@ -115,6 +115,22 @@ final class JenkinsSourceTests: XCTestCase {
         XCTAssertTrue(items.isEmpty)
     }
 
+    func testResolveConfigJoinsRelativeJobsToBaseAndKeepsAbsolute() {
+        let cfg = HelmConfig(jenkinsURL: "https://ci.example.com/",
+                             jenkinsUser: me,
+                             jenkinsJobs: ["/job/Mobile/job/Deploy/",
+                                           "https://other.example.com/job/X/"])
+        let resolved = JenkinsSource.resolveConfig(config: cfg, env: ["HELM_JENKINS_TOKEN": "t"])
+        XCTAssertEqual(resolved?.jobURLs,
+                       ["https://ci.example.com/job/Mobile/job/Deploy/",
+                        "https://other.example.com/job/X/"])
+    }
+
+    func testResolveConfigNilWhenRelativeJobsButNoBase() {
+        let cfg = HelmConfig(jenkinsUser: me, jenkinsJobs: ["job/Mobile/job/Deploy/"])
+        XCTAssertNil(JenkinsSource.resolveConfig(config: cfg, env: ["HELM_JENKINS_TOKEN": "t"]))
+    }
+
     func testResolveTokenPrefersEnvThenFile() throws {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString)
