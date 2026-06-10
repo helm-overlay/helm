@@ -96,7 +96,7 @@ struct AttentionListView: View {
         HStack(spacing: 16) {
             HintBar(hints: [Hint(key: "↵", label: "open"),
                             Hint(key: "⌘N", label: "new"),
-                            Hint(key: "⌘X", label: "kill"),
+                            Hint(key: "⌘X", label: "kill/stop"),
                             Hint(key: "esc", label: "dismiss")])
             Spacer(minLength: 12)
         }
@@ -164,10 +164,13 @@ private struct AttentionRow: View {
             OrbitIndicator(state: s.state, needsInput: s.needsInput)
         } else if let pr = item as? PullRequest {
             PROrbitIndicator(state: pr.orbitState)
+        } else if let job = item as? JenkinsJob {
+            JenkinsOrbitIndicator(job: job)
         }
     }
 
-    /// Project for a session, repo basename for a PR — the "where" that anchors the row.
+    /// Project for a session, repo basename for a PR, folder for a Jenkins job — the "where"
+    /// that anchors the row.
     private var context: String { item.context }
 
     private var reasonLabel: String { AttentionPalette.label(item.reason) }
@@ -195,6 +198,8 @@ enum AttentionPalette {
         case .prChangesRequested:               return PROrbitIndicator.rose
         case .prCiFailed:                       return PROrbitIndicator.red
         case .prMergeable:                      return PROrbitIndicator.emerald
+        case .jenkinsFailed:                    return PROrbitIndicator.red
+        case .jenkinsUnstable:                  return PROrbitIndicator.rose
         case .live:                             return PROrbitIndicator.emerald
         case .none:                             return PROrbitIndicator.slate
         }
@@ -208,6 +213,8 @@ enum AttentionPalette {
         case .prChangesRequested: return "changes"
         case .prCiFailed:         return "CI failed"
         case .prMergeable:        return "ready"
+        case .jenkinsFailed:      return "build failed"
+        case .jenkinsUnstable:    return "unstable"
         case .live:               return "working"
         case .none:               return ""
         }

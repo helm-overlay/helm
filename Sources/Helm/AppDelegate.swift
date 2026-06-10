@@ -224,14 +224,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// ⌘X in the launcher: kill the selected session row. Beeps for a non-session row (a PR
-    /// can't be killed) so the keystroke gives feedback either way.
+    /// ⌘X in the launcher: terminate the selected row. A session is killed; a building Jenkins
+    /// build is stopped. Beeps for anything else (a PR, a finished build) so the keystroke
+    /// always gives feedback.
     private func killSelectedAttention() {
-        guard let session = attentionModel.selectedItem as? ChatSession, let pid = session.pid else {
-            NSSound.beep(); return
+        switch attentionModel.selectedItem {
+        case let session as ChatSession where session.pid != nil:
+            TerminalDispatcher.closePane(pid: session.pid!)
+            attentionModel.kill(session)
+        case let job as JenkinsJob where job.building:
+            attentionModel.stopBuild(job)
+        default:
+            NSSound.beep()
         }
-        TerminalDispatcher.closePane(pid: pid)
-        attentionModel.kill(session)
     }
 
     private func addWorkspaceFolders() {

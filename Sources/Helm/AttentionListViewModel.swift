@@ -42,7 +42,7 @@ final class AttentionListViewModel: ObservableObject {
     private var killed: Set<String> = []
 
     /// The registration point: add an integration by adding its source here.
-    init(sources: [any AttentionSource] = [SessionFeedSource(), PRSource()]) {
+    init(sources: [any AttentionSource] = [SessionFeedSource(), PRSource(), JenkinsSource()]) {
         self.sources = sources
     }
 
@@ -122,6 +122,21 @@ final class AttentionListViewModel: ObservableObject {
         killed.remove(id)
         if let owner, let source = sources.first(where: { $0.id == owner }) { reload(source) }
         else { reloadInBackground() }
+    }
+
+    /// ⌘X on a building Jenkins row: POST `/stop` to abort it, then re-poll the source so the
+    /// row settles (aborted → drops out of the feed). The build is dropped optimistically; a
+    /// reload restores it if the abort didn't take.
+    func stopBuild(_ job: JenkinsJob) {
+        let owner = sourceID(holding: job.id)
+        guard let source = sources.first(where: { $0.id == "jenkins" }) as? JenkinsSource else { return }
+        killed.insert(job.id)
+        for key in cache.keys { cache[key]?.removeAll { $0.id == job.id } }
+        recompute()
+        _Concurrency.Task.detached(priority: .userInitiated) {
+            source.stop(job)
+            await self.finishKill(job.id, owner: owner)
+        }
     }
 
     /// Which source's cache slice currently holds `id` — so a kill reloads only that source.

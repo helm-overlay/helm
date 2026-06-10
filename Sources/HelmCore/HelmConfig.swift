@@ -42,6 +42,13 @@ public struct HelmConfig: Equatable {
     /// Folders the user explicitly removed. Subtracted by `resolvedWorkspaceFolders()` so a
     /// `workspaceRoots` parent can't silently re-add a child the user dismissed.
     public var excludedFolders: [String]
+    /// Jenkins host root (e.g. `https://minion.browserstack.com`). Nil disables the source.
+    public var jenkinsURL: String?
+    /// Jenkins login, matched against a build's trigger-cause `userId` to find builds you ran.
+    public var jenkinsUser: String?
+    /// Whitelist of full job URLs to poll for your builds. Empty disables the source. The API
+    /// token is read from the `HELM_JENKINS_TOKEN` env var, never stored here.
+    public var jenkinsJobs: [String]
 
     public init(terminal: TerminalKind = .default,
                 notificationsEnabled: Bool = true,
@@ -49,7 +56,10 @@ public struct HelmConfig: Equatable {
                 defaultAgent: AgentKind = .claude,
                 workspaceFolders: [String] = [],
                 workspaceRoots: [String] = [],
-                excludedFolders: [String] = []) {
+                excludedFolders: [String] = [],
+                jenkinsURL: String? = nil,
+                jenkinsUser: String? = nil,
+                jenkinsJobs: [String] = []) {
         let uniqueEnabled = Self.normalizedAgents(enabledAgents)
         self.terminal = terminal
         self.notificationsEnabled = notificationsEnabled
@@ -58,6 +68,9 @@ public struct HelmConfig: Equatable {
         self.workspaceFolders = Self.normalizedPaths(workspaceFolders)
         self.workspaceRoots = Self.normalizedPaths(workspaceRoots)
         self.excludedFolders = Self.normalizedPaths(excludedFolders)
+        self.jenkinsURL = jenkinsURL
+        self.jenkinsUser = jenkinsUser
+        self.jenkinsJobs = jenkinsJobs
     }
 
     /// Every tracked folder: the explicit `workspaceFolders` plus the immediate child
@@ -103,7 +116,10 @@ public struct HelmConfig: Equatable {
             defaultAgent: parseAgent(obj["defaultAgent"]) ?? .claude,
             workspaceFolders: parseWorkspaceFolders(obj["workspaceFolders"]),
             workspaceRoots: parseWorkspaceFolders(obj["workspaceRoots"]),
-            excludedFolders: parseWorkspaceFolders(obj["excludedFolders"]))
+            excludedFolders: parseWorkspaceFolders(obj["excludedFolders"]),
+            jenkinsURL: (obj["jenkinsURL"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+            jenkinsUser: (obj["jenkinsUser"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+            jenkinsJobs: (obj["jenkinsJobs"] as? [String])?.filter { !$0.isEmpty } ?? [])
     }
 
     public static func addWorkspaceFolders(_ paths: [String], to url: URL = path,

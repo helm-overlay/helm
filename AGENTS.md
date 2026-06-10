@@ -18,6 +18,7 @@ Project/worktree management is NOT Helm's job — that lives in a standalone Pyt
   - `Models.swift` defines `ChatSession`, `LiveRecord`, `HistoryRecord`, session/idle states, and placeholder rows.
   - `AttentionItem.swift` / `AttentionFeed.swift` define the attention-feed seam: the `AttentionItem` row contract, the `AttentionReason` rank scale, and the `AttentionSource` protocol (+ `SessionFeedSource`) that every row producer conforms to. See "Attention launcher" below.
   - `PullRequest.swift` / `PRSource.swift` are the PR row type and its `gh`-backed `AttentionSource`.
+  - `JenkinsJob.swift` / `JenkinsSource.swift` are the Jenkins build row type and its `AttentionSource`, which polls a configured whitelist of jobs over the Jenkins REST API (`<job>/api/json`).
   - `HelmConfig.swift` loads `~/.config/helm/config.json`.
 - `Sources/Helm/` — macOS app/UI.
   - `AppDelegate.swift` wires hotkeys, panel lifecycle, key handling, session actions, and state reaping.
@@ -59,11 +60,34 @@ User config:
 ```json
 {
   "terminal": "terminal",          // or "iterm"/"iterm2"
-  "notificationsEnabled": true     // macOS notifications on attention crossings (panel closed)
+  "notificationsEnabled": true,    // macOS notifications on attention crossings (panel closed)
+  "jenkinsURL": "https://ci.example.com",
+  "jenkinsUser": "you@example.com",
+  "jenkinsJobs": ["https://ci.example.com/job/Mobile/job/Deploy/"]
 }
 ```
 
+The Jenkins API token is read separately (see below), not from this file.
+
 Config path: `~/.config/helm/config.json`. Missing/malformed config falls back to defaults.
+
+Jenkins source inputs:
+
+- `jenkinsURL` / `jenkinsUser` / `jenkinsJobs` (above) plus the API token. `JenkinsSource` is
+  inert (produces no rows) unless `jenkinsUser`, a non-empty `jenkinsJobs` whitelist, and a token
+  are all present — the token is never stored in the config file.
+- Token resolution (`JenkinsSource.resolveToken`): the `HELM_JENKINS_TOKEN` env var if set (an
+  override for terminal/CI launches), else the `~/.config/helm/jenkins-token` file (chmod 600).
+  The file is the primary path because a Dock-launched GUI app inherits no shell environment, and
+  a plain file survives `bin/dev` rebuilds — unlike a Keychain item, whose ACL is gated on this
+  ad-hoc-signed binary's identity (which changes every rebuild).
+- `jenkinsJobs` is a whitelist of full job URLs. Polling the whitelist (rather than scanning the
+  instance) bounds the fan-out: a running build isn't in any per-user RSS feed yet and Jenkins has
+  no cheap per-user "running builds" endpoint, so the curated list is what keeps this cheap.
+- Per job, `JenkinsSource` keeps *your latest* build — the highest-numbered build whose trigger
+  cause `userId` matches `jenkinsUser` (so a coworker's newer run doesn't mask yours). Building →
+  a dimmed `.live` row (⌘X stops it via `POST <build>/stop`); finished within 24h → failed/unstable
+  promote loud, a clean success is inventory-only (search). Older finishes drop.
 
 ## Current behavior to preserve
 

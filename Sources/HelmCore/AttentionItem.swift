@@ -13,8 +13,11 @@ public enum AttentionReason: Equatable {
     case prCiFailed            // your PR: checks are red
     case prReviewRequested     // someone wants *your* review
     case prMergeable           // your PR: approved + green, ready to merge
+    // jenkins
+    case jenkinsFailed         // a build you triggered failed
+    case jenkinsUnstable       // a build you triggered is unstable
     // baseline
-    case live                  // busy session — nothing to do yet
+    case live                  // busy session / building job — nothing to do yet
     case none                  // cold / inventory-only
 
     /// Lowest wins. Action-required reasons share rank 0; come-look/act-soon share 1; a
@@ -22,7 +25,8 @@ public enum AttentionReason: Equatable {
     /// of the original session-only `attentionRank` across item types.
     public var rank: Int {
         switch self {
-        case .needsInput, .prChangesRequested, .prCiFailed: return 0
+        case .needsInput, .prChangesRequested, .prCiFailed,
+             .jenkinsFailed, .jenkinsUnstable:               return 0
         case .needsReview, .prReviewRequested, .prMergeable: return 1
         case .live:                                          return 2
         case .none:                                          return 3
@@ -38,6 +42,8 @@ public enum AttentionReason: Equatable {
         case .prCiFailed:         return "CI failed"
         case .prReviewRequested:  return "review requested"
         case .prMergeable:        return "ready to merge"
+        case .jenkinsFailed:      return "build failed"
+        case .jenkinsUnstable:    return "unstable"
         case .live:               return "working"
         case .none:               return ""
         }
@@ -52,6 +58,7 @@ public enum AttentionReason: Equatable {
 public enum AttentionBadge: Equatable {
     case session(AgentKind)
     case pullRequest
+    case jenkins
 }
 
 /// What pressing Enter on a row does — owned by the item, so the dispatch path never

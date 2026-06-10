@@ -247,6 +247,82 @@ enum PROrbitState {
     }
 }
 
+extension JenkinsJob {
+    /// The non-building states, mapped onto the PR orbit vocabulary: a failed build collapses,
+    /// an unstable one pings rose, a recent success (search-only) parks quietly. Building has
+    /// its own progress ring (`JenkinsOrbitIndicator`); the `.checksRunning` here is only the
+    /// indeterminate fallback for a build with no time estimate.
+    var orbitState: PROrbitState {
+        if building { return .checksRunning }
+        switch result {
+        case .failure:  return .failed
+        case .unstable: return .changesRequested
+        default:        return .open
+        }
+    }
+}
+
+/// Jenkins build glyph. A *running* build draws a real progress ring — the track fills from the
+/// 9-o'clock park to `job.progress(at:)`, recomputed every frame so it advances live between
+/// polls and re-baselines whenever the source hands over a fresh estimate. A build with no time
+/// estimate falls back to the indeterminate orbit; finished builds reuse the PR glyphs.
+struct JenkinsOrbitIndicator: View {
+    let job: JenkinsJob
+
+    private static let park: Double = 180
+    private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+    var body: some View {
+        if job.building && job.estimatedDuration > 0 {
+            progressRing
+        } else {
+            PROrbitIndicator(state: job.orbitState)
+        }
+    }
+
+    private var progressRing: some View {
+        ZStack {
+            Circle().strokeBorder(PROrbitIndicator.emerald.opacity(0.25), lineWidth: 1)
+            arc
+        }
+        .frame(width: 14, height: 14)
+    }
+
+    @ViewBuilder private var arc: some View {
+        if reduceMotion {
+            ring(fraction: job.progress(at: Date()))
+        } else {
+            TimelineView(.animation) { ctx in
+                ring(fraction: job.progress(at: ctx.date))
+            }
+        }
+    }
+
+    /// The filled portion of the ring, with the leading dot riding its head.
+    private func ring(fraction p: Double) -> some View {
+        let shown = max(p, 0.02)   // a sliver even at 0%, so a just-started build reads as "running"
+        let angle = Self.park + shown * 360
+        return ZStack {
+            Circle()
+                .trim(from: 0, to: shown)
+                .stroke(PROrbitIndicator.emerald,
+                        style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+                .rotationEffect(.degrees(Self.park))
+                .frame(width: 13, height: 13)
+            Circle()
+                .fill(PROrbitIndicator.emerald)
+                .frame(width: 4, height: 4)
+                .shadow(color: PROrbitIndicator.emerald.opacity(0.7), radius: 3)
+                .position(point(forAngle: angle))
+        }
+    }
+
+    private func point(forAngle a0: Double) -> CGPoint {
+        let a = a0 * .pi / 180
+        return CGPoint(x: 7 + 6.5 * cos(a), y: 7 + 6.5 * sin(a))
+    }
+}
+
 extension PullRequest {
     var orbitState: PROrbitState {
         if isDraft { return .draft }
