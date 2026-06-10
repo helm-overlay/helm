@@ -6,6 +6,9 @@ import HelmCore
 
 let args = Array(CommandLine.arguments.dropFirst())
 
+let piPluginSource = "git:github.com/helm-overlay/pi-plugin"
+let claudePluginSource = "https://github.com/helm-overlay/claude-plugin.git"
+
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data((message + "\n").utf8))
     exit(1)
@@ -58,9 +61,6 @@ func runInit(_ rest: [String]) {
         fail("helm init: unknown agent '\(agent)'. Supported: claude, pi.")
     }
 }
-
-let piPluginSource = "git:github.com/helm-overlay/pi-plugin"
-let claudePluginSource = "https://github.com/helm-overlay/claude-plugin.git"
 
 func installClaude(home: String) {
     guard home == NSHomeDirectory() else {
