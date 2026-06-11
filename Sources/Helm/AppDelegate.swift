@@ -143,7 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func show() {
         shell.closeNewChat()              // a fresh summon never reopens the picker
         resizePanel()                     // size before it's visible
-        panel.makeKeyAndOrderFront(nil)
+        panel.summon()
         installKeyMonitor()
         attentionModel.startTicking()
         attentionModel.reloadInBackground()

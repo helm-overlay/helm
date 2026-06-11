@@ -25,13 +25,17 @@ final class OverlayPanel: NSPanel {
     /// resizes so the panel doesn't jump when it grows or shrinks.
     private let topInsetFraction: CGFloat = 0.14
 
+    /// Present on every Space (follow the active desktop) and survive other apps' full-screen
+    /// Spaces. Re-asserted on every summon — see `summon()`.
+    private let spaceBehavior: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+
     init(content: NSView) {
         super.init(contentRect: NSRect(x: 0, y: 0, width: minWidth, height: minHeight),
                    styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView],
                    backing: .buffered, defer: false)
         isFloatingPanel = true
         level = .modalPanel
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        collectionBehavior = spaceBehavior
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
@@ -58,6 +62,16 @@ final class OverlayPanel: NSPanel {
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    /// Order the panel front on the *active* Space. Re-applying `collectionBehavior` here is
+    /// load-bearing: while the app sits idle (App Nap / display sleep) the WindowServer drops a
+    /// background accessory window's all-Spaces association, so a stale summon lands on the Space
+    /// the window was last anchored to (the launch desktop). Re-setting it forces the WindowServer
+    /// to re-register the window against whatever Space is now active.
+    func summon() {
+        collectionBehavior = spaceBehavior
+        makeKeyAndOrderFront(nil)
+    }
 
     /// The compact launcher size — narrow, height fit to `contentHeight` up to a cap.
     func setLauncherFrame(contentHeight: CGFloat) {
