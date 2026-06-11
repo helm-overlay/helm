@@ -35,6 +35,10 @@ final class OverlayPanel: NSPanel {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
+        // The UI is styled as dark glass (light text, white-opacity overlays). Pin the
+        // appearance so the material renders dark regardless of system mode or whatever
+        // window sits behind it — otherwise a bright page bleeds through and washes it out.
+        appearance = NSAppearance(named: .darkAqua)
         isMovableByWindowBackground = false
         hidesOnDeactivate = false
         animationBehavior = .utilityWindow
