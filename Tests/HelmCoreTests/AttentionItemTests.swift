@@ -65,6 +65,19 @@ final class AttentionItemTests: XCTestCase {
         XCTAssertEqual(noBranch.subtitle, "p")
     }
 
+    func testOtherContextUsesCwdLeaf() {
+        let other = ChatSession(sessionId: "s", cwd: "/Users/me/Home/dev/scratch-app", project: "Other", label: "L",
+                                state: .cold, kind: nil, pid: nil,
+                                lastActive: Date(timeIntervalSince1970: 1), branch: "b")
+        XCTAssertEqual(other.context, "scratch-app")
+        XCTAssertEqual(other.subtitle, "scratch-app · b")
+
+        let missingCwd = ChatSession(sessionId: "s", cwd: "", project: "Other", label: "L",
+                                     state: .cold, kind: nil, pid: nil,
+                                     lastActive: Date(timeIntervalSince1970: 1), branch: nil)
+        XCTAssertEqual(missingCwd.context, "Other")
+    }
+
     func testPrimaryActionResumesNormalSessionAndNewChatsPlaceholder() {
         XCTAssertEqual(session(.cold).primaryAction,
                        .resumeSession(agent: .claude, sessionId: "s", cwd: "/w"))

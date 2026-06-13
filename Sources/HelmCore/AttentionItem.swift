@@ -103,14 +103,18 @@ extension ChatSession: AttentionItem {
 
     public var title: String { label }
 
-    public var context: String { project }
+    public var context: String {
+        guard project == "Other", !cwd.isEmpty else { return project }
+        let folder = URL(fileURLWithPath: cwd).lastPathComponent
+        return folder.isEmpty ? project : folder
+    }
 
     /// Fuzzy subsequence over label / project / branch / cwd — the same search the sessions
     /// list used, so inventory-on-search keeps that recall.
     public func matches(_ query: String) -> Bool { SessionStore.matches(self, query: query) }
 
     public var subtitle: String? {
-        branch.map { "\(project) · \($0)" } ?? project
+        branch.map { "\(context) · \($0)" } ?? context
     }
 
     public var reason: AttentionReason {
