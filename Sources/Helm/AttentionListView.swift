@@ -161,7 +161,7 @@ private struct AttentionRow: View {
         if let s = item as? ChatSession {
             OrbitIndicator(state: s.state, needsInput: s.needsInput)
         } else if let pr = item as? PullRequest {
-            PROrbitIndicator(state: pr.orbitState)
+            PullRequestOcticonIndicator(pullRequest: pr)
         } else if let job = item as? JenkinsJob {
             JenkinsOrbitIndicator(job: job)
         }
