@@ -66,6 +66,7 @@ struct AttentionListView: View {
                         SectionHeader(title: section.title)
                         ForEach(section.rows) { row in
                             AttentionRow(item: row.item,
+                                         presentation: section.presentation,
                                          expiringSoon: row.expiringSoon,
                                          selected: row.item.id == model.selection, onOpen: { onOpen(row.item) })
                                 .transition(.rowEnterLeave)
@@ -111,6 +112,7 @@ struct AttentionListView: View {
 /// title, and a reason chip tinted to the urgency.
 private struct AttentionRow: View {
     let item: any AttentionItem
+    let presentation: AnyAttentionSourcePresentation
     let expiringSoon: Bool
     let selected: Bool
     let onOpen: () -> Void
@@ -157,14 +159,8 @@ private struct AttentionRow: View {
         .padding(.horizontal, 8)
     }
 
-    @ViewBuilder private var indicator: some View {
-        if let s = item as? ChatSession {
-            OrbitIndicator(state: s.state, needsInput: s.needsInput)
-        } else if let pr = item as? PullRequest {
-            PullRequestOcticonIndicator(pullRequest: pr)
-        } else if let job = item as? JenkinsJob {
-            JenkinsOrbitIndicator(job: job)
-        }
+    private var indicator: some View {
+        presentation.icon(for: item)
     }
 
     /// Project for a session, repo basename for a PR, folder for a Jenkins job — the "where"
@@ -172,7 +168,9 @@ private struct AttentionRow: View {
     private var context: String { item.context }
 
     private var reasonLabel: String { AttentionPalette.label(item.reason) }
-    private var tint: Color { AttentionPalette.color(item.reason) }
+    private var tint: Color {
+        presentation.tint(for: item, defaultTint: AttentionPalette.color(item.reason))
+    }
 }
 
 private struct SectionHeader: View {
@@ -188,6 +186,8 @@ private struct SectionHeader: View {
 /// Maps an `AttentionReason` to its launcher color + short label. Reuses the orbit palette
 /// so a row's chip matches its glyph.
 enum AttentionPalette {
+    static let claudeOrange = Color(red: 0.851, green: 0.467, blue: 0.341)  // #D97757
+
     static func color(_ reason: AttentionReason) -> Color {
         switch reason {
         case .needsInput:                       return PROrbitIndicator.amber

@@ -12,6 +12,7 @@ struct FeedRow: Identifiable {
 struct FeedSection: Identifiable {
     let id: String            // source id
     let title: String         // section header
+    let presentation: AnyAttentionSourcePresentation
     let rows: [FeedRow]
 }
 
@@ -32,7 +33,9 @@ final class AttentionListViewModel: ObservableObject {
     @Published private(set) var loading: Bool = false
     @Published var selection: String?                                   // AttentionItem.id
 
-    private let sources: [any AttentionSource]
+    private let registrations: [AttentionSourceRegistration]
+
+    private var sources: [any AttentionSource] { registrations.map(\.source) }
     private var cache: [String: [any AttentionItem]] = [:]              // keyed by source.id
     private var timers: [String: Timer] = [:]
     private var reloading: Set<String> = []                             // per-source reentrancy guard
@@ -41,9 +44,9 @@ final class AttentionListViewModel: ObservableObject {
     /// list until a reload confirms them gone, so a mid-teardown poll can't resurrect them.
     private var killed: Set<String> = []
 
-    /// The registration point: add an integration by adding its source here.
-    init(sources: [any AttentionSource] = [SessionFeedSource(), PRSource(), JenkinsSource()]) {
-        self.sources = sources
+    /// The registration point: add an integration by adding its source and presentation here.
+    init(registrations: [AttentionSourceRegistration] = AttentionSourceRegistration.defaults) {
+        self.registrations = registrations
     }
 
     var attentionCount: Int { flat.filter { $0.reason.wantsAttention }.count }
@@ -154,12 +157,16 @@ final class AttentionListViewModel: ObservableObject {
         // you type, the gate drops and the full cached inventory is searched instead, so cold
         // sessions and non-urgent PRs surface — resting = push, expansion = pull. Either way,
         // rows rank by urgency (loudest first, then newest); empty sections drop.
-        let next: [FeedSection] = sources.compactMap { source in
+        let next: [FeedSection] = registrations.compactMap { registration in
+            let source = registration.source
             let pool = cache[source.id] ?? []
             let visible = (searching ? pool.filter { $0.matches(q) } : pool.filter(source.promotes))
                 .sorted(by: AttentionFeed.precedes)
             let rows = visible.map { FeedRow(item: $0, expiringSoon: !searching && source.expiringSoon($0)) }
-            return rows.isEmpty ? nil : FeedSection(id: source.id, title: source.title, rows: rows)
+            return rows.isEmpty ? nil : FeedSection(id: source.id,
+                                                    title: source.title,
+                                                    presentation: registration.presentation,
+                                                    rows: rows)
         }
         withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
             sections = next
