@@ -7,6 +7,9 @@ enum SessionIO {
     static let historyCache = HistoryCache()
 
     private static let headBudgetBytes = 64 * 1024
+    // Metadata lines (cwd/gitBranch/aiTitle/entrypoint) are tiny; anything larger is conversation
+    // content. Skipping it keeps the scan going toward the metadata instead of spending the budget.
+    private static let maxKeptLineBytes = 16 * 1024
     private static let maxLineBytes = 256 * 1024
     private static let headScanBytes = 4 * 1024 * 1024
     private static let chunkBytes = 64 * 1024
@@ -36,7 +39,7 @@ enum SessionIO {
             buffer.append(chunk)
             while let nlIdx = buffer.firstIndex(of: nl) {
                 let lineLen = nlIdx - buffer.startIndex
-                if lineLen <= maxLineBytes {
+                if lineLen <= maxKeptLineBytes {
                     collected.append(buffer[buffer.startIndex..<nlIdx])
                     collected.append(nl)
                 }
@@ -45,7 +48,7 @@ enum SessionIO {
             }
             if buffer.count > maxLineBytes { buffer.removeAll(keepingCapacity: false) }
         }
-        if !buffer.isEmpty && buffer.count <= maxLineBytes && collected.count < headBudgetBytes {
+        if !buffer.isEmpty && buffer.count <= maxKeptLineBytes && collected.count < headBudgetBytes {
             collected.append(buffer)
             collected.append(nl)
         }
