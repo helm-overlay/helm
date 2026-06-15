@@ -196,6 +196,9 @@ enum AttentionPalette {
         case .prChangesRequested:               return PROrbitIndicator.rose
         case .prCiFailed:                       return PROrbitIndicator.red
         case .prMergeable:                      return PROrbitIndicator.emerald
+        case .prCiRunning:                      return PROrbitIndicator.emerald
+        case .prChecksGreen:                    return PROrbitIndicator.violet
+        case .prInReview:                       return PROrbitIndicator.slate
         case .jenkinsFailed:                    return PROrbitIndicator.red
         case .jenkinsUnstable:                  return PROrbitIndicator.rose
         case .live:                             return PROrbitIndicator.emerald
@@ -211,6 +214,9 @@ enum AttentionPalette {
         case .prChangesRequested: return "changes"
         case .prCiFailed:         return "CI failed"
         case .prMergeable:        return "ready"
+        case .prCiRunning:        return "CI running"
+        case .prChecksGreen:      return "checks passed"
+        case .prInReview:         return "in review"
         case .jenkinsFailed:      return "build failed"
         case .jenkinsUnstable:    return "unstable"
         case .live:               return "working"

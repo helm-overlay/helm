@@ -32,4 +32,23 @@ final class PRSourceTests: XCTestCase {
         XCTAssertFalse(s.promotes(p))          // past the 7d cutoff → hidden (search-only)
         XCTAssertFalse(s.expiringSoon(p))      // already gone, no longer "about to expire"
     }
+
+    /// Your own open PR, checks running, last touched `ageDays` ago.
+    private func minePR(ageDays: Double) -> PullRequest {
+        PullRequest(repo: "org/api", number: 2, titleText: "t", url: "https://x/2",
+                    isMine: true, reviewRequestedFromMe: false, isDraft: false,
+                    reviewState: .reviewRequired, ciState: .pending,
+                    updatedAt: nowDate.addingTimeInterval(-ageDays * 86_400))
+    }
+
+    func testActiveOwnPRWithRunningCIPromotes() {
+        let s = source(), p = minePR(ageDays: 2)
+        XCTAssertEqual(p.reason, .prCiRunning)
+        XCTAssertTrue(s.promotes(p))           // an active PR is visible so you can watch its state
+    }
+
+    func testOwnPRDropsOncePastTheVisibilityWindow() {
+        let s = source(), p = minePR(ageDays: 8)
+        XCTAssertFalse(s.promotes(p))          // not touched in 7d → no longer "active" → hidden
+    }
 }

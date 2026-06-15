@@ -33,16 +33,20 @@ public struct PullRequest: AttentionItem, Equatable {
 
     public func matches(_ query: String) -> Bool { PRSource.matches(self, query: query) }
 
-    /// A PR review request always wants you. Among your own PRs, a red check or a
-    /// changes-requested review demands action; an approved+green one is ready to merge;
-    /// anything else (incl. drafts) is inventory-only.
+    /// A PR review request always wants you. Among your own PRs the reason mirrors the live
+    /// state so an active PR stays in view: a red check or changes-requested demands action;
+    /// checks still running / passed / awaiting review each read out their state; an
+    /// approved+green one is ready to merge. Drafts are inventory-only. (Recency — last
+    /// touched within the source's window — is what gates these into the feed; see `PRSource`.)
     public var reason: AttentionReason {
         if reviewRequestedFromMe { return .prReviewRequested }
         guard isMine, !isDraft else { return .none }
         if ciState == .failure                              { return .prCiFailed }
         if reviewState == .changesRequested                 { return .prChangesRequested }
+        if ciState == .pending                              { return .prCiRunning }
         if reviewState == .approved && ciState == .success  { return .prMergeable }
-        return .none
+        if ciState == .success                              { return .prChecksGreen }
+        return .prInReview
     }
 }
 

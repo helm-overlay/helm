@@ -13,6 +13,9 @@ public enum AttentionReason: Equatable {
     case prCiFailed            // your PR: checks are red
     case prReviewRequested     // someone wants *your* review
     case prMergeable           // your PR: approved + green, ready to merge
+    case prCiRunning           // your PR: checks still in progress
+    case prChecksGreen         // your PR: checks passed, still awaiting review
+    case prInReview            // your PR: open, awaiting review (no CI signal)
     // jenkins
     case jenkinsFailed         // a build you triggered failed
     case jenkinsUnstable       // a build you triggered is unstable
@@ -27,7 +30,8 @@ public enum AttentionReason: Equatable {
         switch self {
         case .needsInput, .prChangesRequested, .prCiFailed,
              .jenkinsFailed, .jenkinsUnstable:               return 0
-        case .needsReview, .prReviewRequested, .prMergeable: return 1
+        case .needsReview, .prReviewRequested, .prMergeable,
+             .prCiRunning, .prChecksGreen, .prInReview:      return 1
         case .live:                                          return 2
         case .none:                                          return 3
         }
@@ -42,6 +46,9 @@ public enum AttentionReason: Equatable {
         case .prCiFailed:         return "CI failed"
         case .prReviewRequested:  return "review requested"
         case .prMergeable:        return "ready to merge"
+        case .prCiRunning:        return "CI running"
+        case .prChecksGreen:      return "checks passed"
+        case .prInReview:         return "in review"
         case .jenkinsFailed:      return "build failed"
         case .jenkinsUnstable:    return "unstable"
         case .live:               return "working"

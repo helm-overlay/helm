@@ -21,8 +21,11 @@ final class PullRequestTests: XCTestCase {
     func testOwnPRReasonByStatus() {
         XCTAssertEqual(pr(mine: true, .reviewRequired, .failure).reason, .prCiFailed)   // red beats everything
         XCTAssertEqual(pr(mine: true, .changesRequested, .success).reason, .prChangesRequested)
+        XCTAssertEqual(pr(mine: true, .approved, .pending).reason, .prCiRunning)        // CI in flight, even if approved
         XCTAssertEqual(pr(mine: true, .approved, .success).reason, .prMergeable)
-        XCTAssertEqual(pr(mine: true, .reviewRequired, .pending).reason, .none)         // nothing actionable yet
+        XCTAssertEqual(pr(mine: true, .reviewRequired, .success).reason, .prChecksGreen)// checks done, awaiting review
+        XCTAssertEqual(pr(mine: true, .reviewRequired, .pending).reason, .prCiRunning)  // checks still running
+        XCTAssertEqual(pr(mine: true, .reviewRequired, .none).reason, .prInReview)      // open, no CI signal
     }
 
     func testDraftAndOthersAreInventoryOnly() {

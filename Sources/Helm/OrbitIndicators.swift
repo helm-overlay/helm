@@ -216,6 +216,7 @@ struct OrbitIndicator: View {
 /// the PR; the satellite's behavior is its status.
 enum PROrbitState {
     case checksRunning     // CI in progress  → satellite orbits (work happening now)
+    case checksPassed      // CI green, no approval yet → solid violet ring, parked dot (awaiting review)
     case wantsReview       // my review asked → amber sonar ping (someone's waiting on you)
     case changesRequested  // changes on mine → rose sonar ping (sent back to you)
     case failed            // CI red          → decayed orbit: satellite fallen, ring fractured
@@ -226,6 +227,7 @@ enum PROrbitState {
     var tint: Color {
         switch self {
         case .checksRunning, .ready: return PROrbitIndicator.emerald
+        case .checksPassed:          return PROrbitIndicator.violet
         case .wantsReview:           return PROrbitIndicator.amber
         case .changesRequested:      return PROrbitIndicator.rose
         case .failed:                return PROrbitIndicator.red
@@ -237,6 +239,7 @@ enum PROrbitState {
     var label: String {
         switch self {
         case .checksRunning:    return "checks…"
+        case .checksPassed:     return "checks ok"
         case .wantsReview:      return "review"
         case .changesRequested: return "changes"
         case .failed:           return "CI failed"
@@ -332,6 +335,7 @@ extension PullRequest {
         if reviewState == .changesRequested { return .changesRequested }
         if reviewState == .approved && ciState == .success { return .ready }
         if ciState == .pending { return .checksRunning }
+        if ciState == .success { return .checksPassed }
         return .open
     }
 }
@@ -344,6 +348,7 @@ struct PROrbitIndicator: View {
 
     static let emerald = Color(red: 0.204, green: 0.827, blue: 0.600)
     static let amber   = Color(red: 0.984, green: 0.749, blue: 0.141)
+    static let violet  = Color(red: 0.655, green: 0.545, blue: 0.980)
     static let rose    = Color(red: 0.961, green: 0.451, blue: 0.522)
     static let red     = Color(red: 0.937, green: 0.357, blue: 0.357)
     static let slate   = Color(red: 0.553, green: 0.624, blue: 0.722)
@@ -369,6 +374,8 @@ struct PROrbitIndicator: View {
             Circle().strokeBorder(color.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [1.5, 2]))
         case .failed:
             Circle().strokeBorder(color.opacity(0.55), lineWidth: 1.2)   // solid red, slightly heavier
+        case .checksPassed:
+            Circle().strokeBorder(color.opacity(0.7), lineWidth: 1.2)    // solid violet, the closed lap
         default:
             Circle().strokeBorder(color.opacity(state == .open ? 0.35 : 0.3), lineWidth: 1)
         }

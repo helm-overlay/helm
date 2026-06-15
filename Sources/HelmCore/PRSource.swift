@@ -15,7 +15,8 @@ public struct PRSource: AttentionSource {
     let runGh: Runner
     /// Cap per bucket so a prolific account can't stall summon.
     let limit: Int
-    /// A PR untouched (no `updatedAt` change) for longer than this drops out of the feed.
+    /// A PR untouched (no `updatedAt` change) for longer than this drops out of the feed —
+    /// the feed is for active PRs, so this is the "last modified within" visibility window.
     let staleAfter: TimeInterval
     /// How far before the cutoff a still-promoted PR is flagged "expiring" by the view.
     let expiringWithin: TimeInterval
@@ -43,8 +44,9 @@ public struct PRSource: AttentionSource {
 
     public func allItems() async -> [any AttentionItem] { fetchAll() }
 
-    /// Action-required / come-look PRs reach the feed — unless they've gone stale (untouched
-    /// past `staleAfter`). Drafts and non-urgent PRs are inventory-only regardless.
+    /// Every active PR reaches the feed: any PR last touched within `staleAfter` whose reason
+    /// wants attention (all non-draft PRs do — they read out their live state). Older PRs and
+    /// drafts are inventory-only.
     public func promotes(_ item: any AttentionItem) -> Bool {
         item.reason.wantsAttention && age(item) <= staleAfter
     }
@@ -125,10 +127,17 @@ public struct PRSource: AttentionSource {
     }
 
     /// Default runner: `gh <args>`, stdout drained before wait to avoid a full-pipe deadlock.
+    /// PATH is widened to the usual tool locations because a GUI launch (`open`) inherits only
+    /// launchd's minimal PATH, which omits Homebrew — without this `gh` isn't found and the
+    /// whole PR section silently vanishes.
     public static func shellOut(_ args: [String]) -> Data {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         p.arguments = ["gh"] + args
+        var env = ProcessInfo.processInfo.environment
+        let extra = ["/opt/homebrew/bin", "/usr/local/bin", "\(NSHomeDirectory())/.local/bin"]
+        env["PATH"] = (extra + [env["PATH"] ?? ""]).joined(separator: ":")
+        p.environment = env
         let out = Pipe()
         p.standardOutput = out
         p.standardError = Pipe()   // discard
