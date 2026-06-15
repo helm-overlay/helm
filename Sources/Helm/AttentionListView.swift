@@ -150,7 +150,7 @@ private struct AttentionRow: View {
         .overlay(alignment: .leading) {
             if expiringSoon {
                 RoundedRectangle(cornerRadius: 1.5)
-                    .fill(PROrbitIndicator.amber)
+                    .fill(HelmColors.amber)
                     .frame(width: 3)
                     .padding(.vertical, 6)
                     .padding(.leading, 1)
@@ -186,23 +186,21 @@ private struct SectionHeader: View {
 /// Maps an `AttentionReason` to its launcher color + short label. Reuses the orbit palette
 /// so a row's chip matches its glyph.
 enum AttentionPalette {
-    static let claudeOrange = Color(red: 0.851, green: 0.467, blue: 0.341)  // #D97757
-
     static func color(_ reason: AttentionReason) -> Color {
         switch reason {
-        case .needsInput:                       return PROrbitIndicator.amber
-        case .needsReview:                      return Color(red: 0.655, green: 0.545, blue: 0.980)  // violet
-        case .prReviewRequested:                return PROrbitIndicator.amber
-        case .prChangesRequested:               return PROrbitIndicator.rose
-        case .prCiFailed:                       return PROrbitIndicator.red
-        case .prMergeable:                      return PROrbitIndicator.emerald
-        case .prCiRunning:                      return PROrbitIndicator.emerald
-        case .prChecksGreen:                    return PROrbitIndicator.violet
-        case .prInReview:                       return PROrbitIndicator.slate
-        case .jenkinsFailed:                    return PROrbitIndicator.red
-        case .jenkinsUnstable:                  return PROrbitIndicator.rose
-        case .live:                             return PROrbitIndicator.emerald
-        case .none:                             return PROrbitIndicator.slate
+        case .needsInput:                       return HelmColors.amber
+        case .needsReview:                      return HelmColors.violet
+        case .prReviewRequested:                return HelmColors.amber
+        case .prChangesRequested:               return HelmColors.rose
+        case .prCiFailed:                       return HelmColors.red
+        case .prMergeable:                      return HelmColors.emerald
+        case .prCiRunning:                      return HelmColors.emerald
+        case .prChecksGreen:                    return HelmColors.violet
+        case .prInReview:                       return HelmColors.slate
+        case .jenkinsFailed:                    return HelmColors.red
+        case .jenkinsUnstable:                  return HelmColors.rose
+        case .live:                             return HelmColors.emerald
+        case .none:                             return HelmColors.slate
         }
     }
 

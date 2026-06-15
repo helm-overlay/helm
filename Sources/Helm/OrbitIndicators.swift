@@ -21,13 +21,13 @@ enum PROrbitState {
 
     var tint: Color {
         switch self {
-        case .checksRunning, .ready: return PROrbitIndicator.emerald
-        case .checksPassed:          return PROrbitIndicator.violet
-        case .wantsReview:           return PROrbitIndicator.amber
-        case .changesRequested:      return PROrbitIndicator.rose
-        case .failed:                return PROrbitIndicator.red
-        case .open:                  return PROrbitIndicator.slate
-        case .draft:                 return PROrbitIndicator.gray
+        case .checksRunning, .ready: return HelmColors.emerald
+        case .checksPassed:          return HelmColors.violet
+        case .wantsReview:           return HelmColors.amber
+        case .changesRequested:      return HelmColors.rose
+        case .failed:                return HelmColors.red
+        case .open:                  return HelmColors.slate
+        case .draft:                 return HelmColors.gray
         }
     }
 
@@ -80,7 +80,7 @@ struct JenkinsOrbitIndicator: View {
 
     private var progressRing: some View {
         ZStack {
-            Circle().strokeBorder(PROrbitIndicator.emerald.opacity(0.25), lineWidth: 1)
+            Circle().strokeBorder(HelmColors.emerald.opacity(0.25), lineWidth: 1)
             arc
         }
         .frame(width: 14, height: 14)
@@ -103,14 +103,14 @@ struct JenkinsOrbitIndicator: View {
         return ZStack {
             Circle()
                 .trim(from: 0, to: shown)
-                .stroke(PROrbitIndicator.emerald,
+                .stroke(HelmColors.emerald,
                         style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
                 .rotationEffect(.degrees(Self.park))
                 .frame(width: 13, height: 13)
             Circle()
-                .fill(PROrbitIndicator.emerald)
+                .fill(HelmColors.emerald)
                 .frame(width: 4, height: 4)
-                .shadow(color: PROrbitIndicator.emerald.opacity(0.7), radius: 3)
+                .shadow(color: HelmColors.emerald.opacity(0.7), radius: 3)
                 .position(point(forAngle: angle))
         }
     }
@@ -170,14 +170,6 @@ struct PullRequestOcticonIndicator: View {
 /// Pull request rows themselves use `PullRequestOcticonIndicator` instead.
 struct PROrbitIndicator: View {
     let state: PROrbitState
-
-    static let emerald = Color(red: 0.204, green: 0.827, blue: 0.600)
-    static let amber   = Color(red: 0.984, green: 0.749, blue: 0.141)
-    static let violet  = Color(red: 0.655, green: 0.545, blue: 0.980)
-    static let rose    = Color(red: 0.961, green: 0.451, blue: 0.522)
-    static let red     = Color(red: 0.937, green: 0.357, blue: 0.357)
-    static let slate   = Color(red: 0.553, green: 0.624, blue: 0.722)
-    static let gray    = Color.white.opacity(0.28)
 
     private static let center = CGPoint(x: 7, y: 7)
     private static let radius: CGFloat = 6.5
