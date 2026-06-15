@@ -3,7 +3,8 @@ import AppKit
 import HelmCore
 
 // Orbit-metaphor status glyphs shared by the attention launcher's rows. A satellite orbits a
-// ring; its motion encodes state. Sessions and pull requests reuse the same vocabulary.
+// ring; its motion encodes state. Sessions use this directly; non-session sources can opt into
+// their native glyph vocabulary instead.
 
 /// Orbit-metaphor status indicator. The ring is always present; only the satellite's
 /// behavior encodes state — it circles for `liveBusy` (motion == alive now), parks at
@@ -340,9 +341,39 @@ extension PullRequest {
     }
 }
 
-/// PR status as orbit motion, reusing the sessions indicator's vocabulary: a satellite
-/// orbits a ring while checks run, pings outward when a PR wants you, fills the ring when
-/// it's ready to merge, and decays (falls + fractures the ring) when CI is red.
+/// GitHub-native PR indicator backed by bundled Primer Octicons SVG assets. This replaces the
+/// orbit metaphor for PR rows while leaving session/Jenkins indicators alone.
+struct PullRequestOcticonIndicator: View {
+    let pullRequest: PullRequest
+
+    private var color: Color { pullRequest.orbitState.tint }
+
+    var body: some View {
+        image
+            .resizable()
+            .renderingMode(.template)
+            .aspectRatio(contentMode: .fit)
+            .foregroundStyle(color)
+            .frame(width: 16, height: 16)
+            .opacity(pullRequest.isDraft ? 0.7 : 1)
+    }
+
+    private var image: Image {
+        switch pullRequest.orbitState {
+        case .draft:            return Image("git-pull-request-draft")
+        case .failed:           return Image("x-circle-fill")
+        case .ready:            return Image("git-merge")
+        case .checksPassed:     return Image("check-circle-fill")
+        case .checksRunning:    return Image("sync")
+        case .wantsReview:      return Image("comment-discussion")
+        case .changesRequested: return Image("git-pull-request-closed")
+        case .open:             return Image("git-pull-request")
+        }
+    }
+}
+
+/// PR-shaped orbit status used by Jenkins and any source that wants Helm's default status glyphs.
+/// Pull request rows themselves use `PullRequestOcticonIndicator` instead.
 struct PROrbitIndicator: View {
     let state: PROrbitState
 
