@@ -23,26 +23,7 @@ struct NewChatPickerView: View {
     private var header: some View {
         HStack(spacing: 10) {
             Image(systemName: "plus.bubble").foregroundStyle(.secondary)
-            HStack(spacing: 2) {
-                if model.query.isEmpty {
-                    ZStack(alignment: .leading) {
-                        Text("New chat in project…")
-                            .foregroundStyle(.secondary)
-                            .font(.system(size: 15, weight: .regular))
-                        BlinkingCursor(anchor: model.lastEdit)
-                    }
-                } else {
-                    Text(model.query)
-                        .foregroundStyle(.primary)
-                        .font(.system(size: 15, weight: .regular))
-                        .background(
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(model.querySelected ? Color.accentColor.opacity(0.35) : .clear)
-                                .padding(.horizontal, -4)
-                        )
-                    if !model.querySelected { BlinkingCursor(anchor: model.lastEdit) }
-                }
-            }
+            QueryLine(model: model, placeholder: "New chat in project…")
             Spacer()
             Text("\(model.filtered.count) project\(model.filtered.count == 1 ? "" : "s")")
                 .font(.system(size: 11)).foregroundStyle(.tertiary)

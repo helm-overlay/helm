@@ -327,25 +327,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Picker keys: ↵ launches a chat in the selected project, esc backs out to the view you
-    /// were on (not a full dismiss), arrows move, the rest is typeahead over project names.
+    /// were on (not a full dismiss), ↑↓ move the project list, ⌘N toggles it back off. Editing
+    /// the query line (typing, caret movement, paste, delete) is shared with the attention view.
     private func handleNewChat(_ event: NSEvent, cmd: Bool, option: Bool) -> Bool {
         switch Int(event.keyCode) {
         case kVK_Escape:      closeNewChatPicker(); return true
         case kVK_Return, kVK_ANSI_KeypadEnter:
             if let c = newChatModel.selectedChoice { newChatInProject(c) } else { NSSound.beep() }
             return true
-        case kVK_DownArrow:   newChatModel.clearSelection(); newChatModel.move(by: 1);  return true
-        case kVK_UpArrow:     newChatModel.clearSelection(); newChatModel.move(by: -1); return true
-        case kVK_ANSI_A where cmd: newChatModel.selectAllQuery(); return true
-        case kVK_ANSI_N where cmd: closeNewChatPicker();         return true   // ⌘N toggles it back off
-        case kVK_Delete:
-            if cmd        { newChatModel.clearQuery() }
-            else if option { newChatModel.deleteWordBack() }
-            else           { newChatModel.backspaceQuery() }
-            return true
+        case kVK_ANSI_N where cmd: closeNewChatPicker(); return true   // ⌘N toggles it back off
+        case kVK_Delete where cmd: newChatModel.clearQuery(); return true
         default: break
         }
-        return appendIfPrintable(event, cmd: cmd, to: { [weak self] in self?.newChatModel.appendQuery($0) })
+        return handleQueryEditing(event, cmd: cmd, option: option, model: newChatModel)
     }
 
     private func handleAttention(_ event: NSEvent, cmd: Bool, option: Bool) -> Bool {
@@ -354,30 +348,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case kVK_Return, kVK_ANSI_KeypadEnter:
             if let item = attentionModel.selectedItem { openAttentionItem(item) }
             return true
-        case kVK_DownArrow:   attentionModel.clearSelection(); attentionModel.move(by: 1);  return true
-        case kVK_UpArrow:     attentionModel.clearSelection(); attentionModel.move(by: -1); return true
-        case kVK_ANSI_A where cmd: attentionModel.selectAllQuery();  return true
-        case kVK_ANSI_X where cmd: killSelectedAttention();         return true
-        case kVK_Delete:
+        case kVK_ANSI_X where cmd: killSelectedAttention(); return true
+        case kVK_Delete where cmd:
             // ⌘⌫ depends on what's active: clear the query while you're searching, otherwise
             // terminate the highlighted row (session kill / building-job stop).
-            if cmd        { if attentionModel.query.isEmpty { killSelectedAttention() } else { attentionModel.clearQuery() } }
-            else if option { attentionModel.deleteWordBack() }
-            else           { attentionModel.backspaceQuery() }
+            if attentionModel.query.isEmpty { killSelectedAttention() } else { attentionModel.clearQuery() }
             return true
         default: break
         }
-        return appendIfPrintable(event, cmd: cmd, to: { [weak self] in self?.attentionModel.appendQuery($0) })
+        return handleQueryEditing(event, cmd: cmd, option: option, model: attentionModel)
     }
 
-    /// Typeahead: a printable character (no ⌘) extends the active view's filter query.
+    /// Editing keys shared by both launcher query lines, so the two stay identical by
+    /// construction: ↑↓ move the row selection; ←→ (and ⌥/⌘ variants) move the caret; ⌫/⌥⌫
+    /// delete; ⌘A selects all; ⌘V pastes; any other printable input is inserted at the caret.
+    private func handleQueryEditing(_ event: NSEvent, cmd: Bool, option: Bool, model: any QueryEditable) -> Bool {
+        switch Int(event.keyCode) {
+        case kVK_DownArrow:   model.clearSelection(); model.move(by: 1);  return true
+        case kVK_UpArrow:     model.clearSelection(); model.move(by: -1); return true
+        case kVK_LeftArrow:
+            if cmd { model.moveCursorToStart() } else if option { model.moveWord(by: -1) } else { model.moveCursor(by: -1) }
+            return true
+        case kVK_RightArrow:
+            if cmd { model.moveCursorToEnd() } else if option { model.moveWord(by: 1) } else { model.moveCursor(by: 1) }
+            return true
+        case kVK_ANSI_A where cmd: model.selectAllQuery(); return true
+        case kVK_ANSI_V where cmd: return pasteIntoQuery(model)
+        case kVK_Delete:
+            if option { model.deleteWordBack() } else { model.backspaceQuery() }
+            return true
+        default: break
+        }
+        return appendIfPrintable(event, cmd: cmd, to: { model.appendQuery($0) })
+    }
+
+    /// ⌘V: insert the pasteboard's plain text at the caret. A search line is single-line, so
+    /// newlines collapse to spaces.
+    private func pasteIntoQuery(_ model: any QueryEditable) -> Bool {
+        guard let s = NSPasteboard.general.string(forType: .string), !s.isEmpty else { return true }
+        let flattened = s.replacingOccurrences(of: "\r\n", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+        model.appendQuery(flattened)
+        return true
+    }
+
+    /// Insert typed input at the caret (no ⌘). Accepts any actual text — letters, digits, and
+    /// punctuation alike — while rejecting the function-key and control scalars that arrows,
+    /// escape, and friends report so they fall through to their own handling.
     private func appendIfPrintable(_ event: NSEvent, cmd: Bool, to append: @escaping (String) -> Void) -> Bool {
-        guard !cmd, let chars = event.charactersIgnoringModifiers,
-              chars.count == 1, let c = chars.first,
-              !c.isASCII || c.isLetter || c.isNumber || c == " " || c == "-" || c == "_" else {
+        guard !cmd, let chars = event.charactersIgnoringModifiers, !chars.isEmpty,
+              chars.unicodeScalars.allSatisfy(isInsertableScalar) else {
             return false
         }
         append(chars)
         return true
     }
+
+    /// True for a scalar that should land in the query: not a control character, and not in the
+    /// private-use range AppKit uses for arrows/F-keys/Home/End and other non-text keys.
+    private func isInsertableScalar(_ scalar: Unicode.Scalar) -> Bool {
+        !CharacterSet.controlCharacters.contains(scalar) && !(scalar.value >= 0xF700 && scalar.value <= 0xF8FF)
+    }
 }
+
+/// The editing surface both launcher view models expose to the shared key handler.
+@MainActor
+protocol QueryEditable: AnyObject {
+    var query: String { get }
+    func appendQuery(_ s: String)
+    func backspaceQuery()
+    func deleteWordBack()
+    func clearQuery()
+    func moveCursor(by delta: Int)
+    func moveWord(by delta: Int)
+    func moveCursorToStart()
+    func moveCursorToEnd()
+    func selectAllQuery()
+    func clearSelection()
+    func move(by delta: Int)
+}
+
+extension AttentionListViewModel: QueryEditable, QueryLineModel {}
+extension NewChatViewModel: QueryEditable, QueryLineModel {}

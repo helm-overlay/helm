@@ -27,11 +27,15 @@ struct FeedSection: Identifiable {
 final class AttentionListViewModel: ObservableObject {
     /// One section per source with promoted rows, in source-registration order.
     @Published private(set) var sections: [FeedSection] = []
-    @Published private(set) var query: String = ""
-    @Published private(set) var querySelected: Bool = false
+    @Published private(set) var field = QueryField()
     @Published private(set) var lastEdit: Date = Date()
     @Published private(set) var loading: Bool = false
     @Published var selection: String?                                   // AttentionItem.id
+
+    var query: String { field.text }
+    var querySelected: Bool { field.selectedAll }
+    var queryBeforeCursor: String { field.beforeCursor }
+    var queryAfterCursor: String { field.afterCursor }
 
     private let registrations: [AttentionSourceRegistration]
 
@@ -181,36 +185,24 @@ final class AttentionListViewModel: ObservableObject {
         }
     }
 
-    // MARK: Query (typeahead)
+    // MARK: Query (editable filter line)
 
-    func appendQuery(_ s: String) {
-        if querySelected { query = ""; querySelected = false }
-        query += s; lastEdit = Date(); recompute()
-    }
+    /// Text edits change the filter, so they recompute the feed; caret moves don't.
+    private func edit(_ change: (inout QueryField) -> Void) { change(&field); lastEdit = Date(); recompute() }
+    private func navigate(_ change: (inout QueryField) -> Void) { change(&field); lastEdit = Date() }
 
-    func backspaceQuery() {
-        if querySelected { clearQuery(); return }
-        guard !query.isEmpty else { return }
-        query.removeLast(); lastEdit = Date(); recompute()
-    }
+    func appendQuery(_ s: String) { edit { $0.insert(s) } }
+    func backspaceQuery() { edit { $0.backspace() } }
+    func deleteWordBack() { edit { $0.deleteWordBack() } }
+    func clearQuery() { edit { $0.clear() } }
 
-    func deleteWordBack() {
-        if querySelected { clearQuery(); return }
-        guard !query.isEmpty else { return }
-        var s = query[...]
-        while let c = s.last, c == " " { s = s.dropLast() }
-        while let c = s.last, c != " " { s = s.dropLast() }
-        query = String(s); lastEdit = Date(); recompute()
-    }
+    func moveCursor(by delta: Int) { navigate { $0.moveCursor(by: delta) } }
+    func moveWord(by delta: Int) { navigate { $0.moveWord(by: delta) } }
+    func moveCursorToStart() { navigate { $0.moveToStart() } }
+    func moveCursorToEnd() { navigate { $0.moveToEnd() } }
 
-    func clearQuery() {
-        querySelected = false; lastEdit = Date()
-        guard !query.isEmpty else { return }
-        query = ""; recompute()
-    }
-
-    func selectAllQuery() { querySelected = !query.isEmpty }
-    func clearSelection() { querySelected = false }
+    func selectAllQuery() { navigate { $0.selectAll() } }
+    func clearSelection() { navigate { $0.deselect() } }
 
     // MARK: Selection (arrows)
 

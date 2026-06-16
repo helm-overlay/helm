@@ -8,10 +8,14 @@ import HelmCore
 @MainActor
 final class NewChatViewModel: ObservableObject {
     @Published private(set) var choices: [ProjectChoice] = []   // ranked recent-first, unfiltered
-    @Published private(set) var query: String = ""
-    @Published private(set) var querySelected: Bool = false
+    @Published private(set) var field = QueryField()
     @Published private(set) var lastEdit: Date = Date()
     @Published var selection: String?                           // ProjectChoice.id (path)
+
+    var query: String { field.text }
+    var querySelected: Bool { field.selectedAll }
+    var queryBeforeCursor: String { field.beforeCursor }
+    var queryAfterCursor: String { field.afterCursor }
 
     /// The current query's matches, ranked order preserved.
     var filtered: [ProjectChoice] { SessionStore.filterProjectChoices(choices, query: query) }
@@ -24,44 +28,31 @@ final class NewChatViewModel: ObservableObject {
     /// Singular Chats launchpad so ⌘N then ↵ never starts a drive-by by accident.
     func open(_ choices: [ProjectChoice], preselect: String? = nil) {
         self.choices = choices
-        query = ""
-        querySelected = false
+        field = QueryField()
         lastEdit = Date()
         selection = choices.first { $0.name == preselect }?.id
             ?? choices.first { !$0.isLaunchpad }?.id
             ?? choices.first?.id
     }
 
-    // MARK: Query (typeahead) — mirrors the other launchers so editing feels identical.
+    // MARK: Query (editable filter line) — mirrors the other launchers so editing feels identical.
 
-    func appendQuery(_ s: String) {
-        if querySelected { query = ""; querySelected = false }
-        query += s; lastEdit = Date(); reconcileSelection()
-    }
+    /// Text edits narrow the project list; caret moves don't.
+    private func edit(_ change: (inout QueryField) -> Void) { change(&field); lastEdit = Date(); reconcileSelection() }
+    private func navigate(_ change: (inout QueryField) -> Void) { change(&field); lastEdit = Date() }
 
-    func backspaceQuery() {
-        if querySelected { clearQuery(); return }
-        guard !query.isEmpty else { return }
-        query.removeLast(); lastEdit = Date(); reconcileSelection()
-    }
+    func appendQuery(_ s: String) { edit { $0.insert(s) } }
+    func backspaceQuery() { edit { $0.backspace() } }
+    func deleteWordBack() { edit { $0.deleteWordBack() } }
+    func clearQuery() { edit { $0.clear() } }
 
-    func deleteWordBack() {
-        if querySelected { clearQuery(); return }
-        guard !query.isEmpty else { return }
-        var s = query[...]
-        while let c = s.last, c == " " { s = s.dropLast() }
-        while let c = s.last, c != " " { s = s.dropLast() }
-        query = String(s); lastEdit = Date(); reconcileSelection()
-    }
+    func moveCursor(by delta: Int) { navigate { $0.moveCursor(by: delta) } }
+    func moveWord(by delta: Int) { navigate { $0.moveWord(by: delta) } }
+    func moveCursorToStart() { navigate { $0.moveToStart() } }
+    func moveCursorToEnd() { navigate { $0.moveToEnd() } }
 
-    func clearQuery() {
-        querySelected = false; lastEdit = Date()
-        guard !query.isEmpty else { return }
-        query = ""; reconcileSelection()
-    }
-
-    func selectAllQuery() { querySelected = !query.isEmpty }
-    func clearSelection() { querySelected = false }
+    func selectAllQuery() { navigate { $0.selectAll() } }
+    func clearSelection() { navigate { $0.deselect() } }
 
     // MARK: Selection (arrows)
 

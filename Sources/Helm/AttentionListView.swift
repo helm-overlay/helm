@@ -25,26 +25,7 @@ struct AttentionListView: View {
     private var header: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            HStack(spacing: 2) {
-                if model.query.isEmpty {
-                    ZStack(alignment: .leading) {
-                        Text("Type to filter…")
-                            .foregroundStyle(.secondary)
-                            .font(.system(size: 15, weight: .regular))
-                        BlinkingCursor(anchor: model.lastEdit)
-                    }
-                } else {
-                    Text(model.query)
-                        .foregroundStyle(.primary)
-                        .font(.system(size: 15, weight: .regular))
-                        .background(
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(model.querySelected ? Color.accentColor.opacity(0.35) : .clear)
-                                .padding(.horizontal, -4)
-                        )
-                    if !model.querySelected { BlinkingCursor(anchor: model.lastEdit) }
-                }
-            }
+            QueryLine(model: model, placeholder: "Type to filter…")
             Spacer()
             Text("\(model.attentionCount) need you · \(model.workingCount) working")
                 .font(.system(size: 11)).foregroundStyle(.tertiary)
