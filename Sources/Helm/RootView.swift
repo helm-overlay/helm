@@ -36,11 +36,11 @@ struct RootView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
-        .background(.thickMaterial)
+        .background(HelmColors.surface)
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.white.opacity(0.08), lineWidth: 1)
+                .strokeBorder(HelmColors.hairline, lineWidth: 1)
         )
         .animation(.easeOut(duration: 0.12), value: shell.newChatActive)
     }

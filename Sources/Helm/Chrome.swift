@@ -16,15 +16,15 @@ struct HintBar: View {
         HStack(spacing: 16) {
             ForEach(hints) { h in
                 HStack(spacing: 4) {
-                    Text(h.key).fontWeight(.semibold)
+                    Text(h.key)
+                        .foregroundStyle(HelmColors.textSecondary)
                         .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
-                    Text(h.label)
+                        .background(HelmColors.hairline, in: RoundedRectangle(cornerRadius: 4))
+                    Text(h.label).foregroundStyle(HelmColors.textTertiary)
                 }
             }
         }
         .font(.system(size: 11))
-        .foregroundStyle(.secondary)
         .lineLimit(1)
         .fixedSize(horizontal: true, vertical: false)
     }

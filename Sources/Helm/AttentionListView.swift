@@ -13,9 +13,9 @@ struct AttentionListView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider().opacity(0.5)
+            Hairline()
             list
-            Divider().opacity(0.5)
+            Hairline()
             footer
         }
     }
@@ -24,11 +24,12 @@ struct AttentionListView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 13)).foregroundStyle(HelmColors.textTertiary)
             QueryLine(model: model, placeholder: "Type to filter…")
             Spacer()
             Text("\(model.attentionCount) need you · \(model.workingCount) working")
-                .font(.system(size: 11)).foregroundStyle(.tertiary)
+                .font(.system(size: 11)).foregroundStyle(HelmColors.textTertiary)
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
     }
@@ -37,7 +38,7 @@ struct AttentionListView: View {
 
     private var list: some View {
         ScrollViewReader { proxy in
-            ScrollView {
+            ScrollView {  // keyboard-driven + auto-scrolls to selection; the track is just noise
                 LazyVStack(alignment: .leading, spacing: 2) {
                     // One titled section per source, urgency-ordered in the model so working
                     // rows trail at the bottom. The inner ForEach owns each row's
@@ -57,7 +58,9 @@ struct AttentionListView: View {
                     if model.visibleRowCount == 0 { emptyState }
                 }
                 .padding(.vertical, 6)
+                .background(HideScrollIndicators())
             }
+            .scrollIndicators(.hidden)
             .onChange(of: model.selection) { _, sel in
                 if let sel { withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(sel, anchor: .center) } }
             }
@@ -66,8 +69,8 @@ struct AttentionListView: View {
 
     private var emptyState: some View {
         Text(model.loading ? "Loading…" : (model.query.isEmpty ? "Nothing wants you right now" : "No matches"))
-            .font(.system(size: 13)).italic()
-            .foregroundStyle(.secondary)
+            .font(.system(size: 13))
+            .foregroundStyle(HelmColors.textSecondary)
             .padding(.horizontal, 16).padding(.vertical, 24)
             .frame(maxWidth: .infinity)
     }
@@ -99,45 +102,54 @@ private struct AttentionRow: View {
     let onOpen: () -> Void
 
     var body: some View {
-        HStack(spacing: 11) {
+        HStack(spacing: 10) {
             indicator
+                .frame(width: 18, alignment: .center)   // fixed gutter so every title aligns
 
             Text(context)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(tint)
+                .font(.system(size: 12))
+                .foregroundStyle(HelmColors.textSecondary)
                 .lineLimit(1)
-                .frame(width: 128, alignment: .leading)
+                .frame(width: 120, alignment: .leading)
 
             Text(item.title)
-                .font(.system(size: 13))
-                .foregroundStyle(.primary)
+                .font(.system(size: 13, weight: .medium))   // the hero — the only 500 on the row
+                .foregroundStyle(HelmColors.textPrimary)
                 .lineLimit(1)
                 .layoutPriority(1)
 
             Spacer(minLength: 8)
 
             Text(reasonLabel)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(tint)
+                .font(.system(size: 11))
+                .foregroundStyle(HelmColors.textTertiary)
                 .lineLimit(1)
-                .frame(width: 96, alignment: .trailing)
+                .frame(width: 92, alignment: .trailing)
         }
         .contentShape(Rectangle())
         .onTapGesture(perform: onOpen)
-        .padding(.horizontal, 12).padding(.vertical, 7)
-        .background(selected ? Color.white.opacity(0.09) : .clear,
-                    in: RoundedRectangle(cornerRadius: 8))
-        // About to drop off the feed: a thin amber bar on the leading edge.
-        .overlay(alignment: .leading) {
-            if expiringSoon {
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(HelmColors.amber)
-                    .frame(width: 3)
-                    .padding(.vertical, 6)
-                    .padding(.leading, 1)
-            }
-        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(selected ? HelmColors.surfaceHover : .clear,
+                    in: RoundedRectangle(cornerRadius: 7))
+        // The one bit of definition: selection draws a 2px rail in the row's accent; an
+        // expiring (but unselected) row keeps the amber warning bar.
+        .overlay(alignment: .leading) { leadingRail }
         .padding(.horizontal, 8)
+    }
+
+    @ViewBuilder private var leadingRail: some View {
+        if let color = railColor {
+            RoundedRectangle(cornerRadius: 1)
+                .fill(color)
+                .frame(width: 2)
+                .padding(.vertical, 6)
+        }
+    }
+
+    private var railColor: Color? {
+        if selected { return accent }
+        if expiringSoon { return HelmColors.amber }
+        return nil
     }
 
     private var indicator: some View {
@@ -149,7 +161,7 @@ private struct AttentionRow: View {
     private var context: String { item.context }
 
     private var reasonLabel: String { AttentionPalette.label(item.reason) }
-    private var tint: Color {
+    private var accent: Color {
         presentation.tint(for: item, defaultTint: AttentionPalette.color(item.reason))
     }
 }
@@ -157,9 +169,10 @@ private struct AttentionRow: View {
 private struct SectionHeader: View {
     let title: String
     var body: some View {
-        Text(title)
-            .font(.system(size: 10, weight: .bold)).foregroundStyle(.tertiary)
-            .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 2)
+        Text(title.uppercased())
+            .font(.system(size: 11)).tracking(0.6)
+            .foregroundStyle(HelmColors.textTertiary)
+            .padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

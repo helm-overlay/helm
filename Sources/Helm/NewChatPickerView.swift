@@ -11,9 +11,9 @@ struct NewChatPickerView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider().opacity(0.5)
+            Hairline()
             list
-            Divider().opacity(0.5)
+            Hairline()
             footer
         }
     }
@@ -22,11 +22,12 @@ struct NewChatPickerView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: "plus.bubble").foregroundStyle(.secondary)
+            Image(systemName: "plus.bubble")
+                .font(.system(size: 13)).foregroundStyle(HelmColors.textTertiary)
             QueryLine(model: model, placeholder: "New chat in project…")
             Spacer()
             Text("\(model.filtered.count) project\(model.filtered.count == 1 ? "" : "s")")
-                .font(.system(size: 11)).foregroundStyle(.tertiary)
+                .font(.system(size: 11)).foregroundStyle(HelmColors.textTertiary)
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
     }
@@ -49,7 +50,9 @@ struct NewChatPickerView: View {
                     }
                 }
                 .padding(.vertical, 6)
+                .background(HideScrollIndicators())
             }
+            .scrollIndicators(.hidden)
             .onChange(of: model.selection) { _, sel in
                 guard let sel else { return }
                 withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(sel, anchor: .center) }
@@ -59,8 +62,8 @@ struct NewChatPickerView: View {
 
     private var emptyState: some View {
         Text(model.choices.isEmpty ? "No tracked projects — ⌘O to add a folder" : "No matches")
-            .font(.system(size: 13)).italic()
-            .foregroundStyle(.secondary)
+            .font(.system(size: 13))
+            .foregroundStyle(HelmColors.textSecondary)
             .padding(.horizontal, 16).padding(.vertical, 24)
             .frame(maxWidth: .infinity)
     }
@@ -84,42 +87,48 @@ private struct ProjectChoiceRow: View {
     let choice: ProjectChoice
     let selected: Bool
 
-    private static let emerald = Color(red: 0.204, green: 0.827, blue: 0.600)  // #34D399
-
     var body: some View {
-        HStack(spacing: 11) {
+        HStack(spacing: 10) {
             Image(systemName: choice.isLaunchpad ? "sparkles" : "folder")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .frame(width: 16)
+                .font(.system(size: 13))
+                .foregroundStyle(HelmColors.textTertiary)
+                .frame(width: 18, alignment: .center)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(choice.name).lineLimit(1)
-                    .font(.system(size: 14, weight: selected ? .semibold : .regular))
-                    .foregroundStyle(.primary)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(HelmColors.textPrimary)
                 Text(choice.isLaunchpad ? "one-off chat in ~/Home" : abbreviatedPath)
                     .lineLimit(1).truncationMode(.head)
-                    .font(.system(size: 10)).foregroundStyle(.tertiary)
+                    .font(.system(size: 11)).foregroundStyle(HelmColors.textTertiary)
             }
 
             Spacer(minLength: 8)
 
             if choice.liveCount > 0 {
-                HStack(spacing: 3) {
-                    Circle().fill(Self.emerald).frame(width: 5, height: 5)
-                    Text("\(choice.liveCount)").font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Self.emerald)
+                HStack(spacing: 4) {
+                    Circle().fill(HelmColors.emerald).frame(width: 5, height: 5)
+                    Text("\(choice.liveCount)").font(.system(size: 11))
+                        .foregroundStyle(HelmColors.textSecondary)
                 }
             }
             if let last = choice.lastActive, last != .distantPast {
                 Text(SessionStore.ageLabel(Date().timeIntervalSince(last)))
-                    .font(.system(size: 11)).foregroundStyle(.tertiary)
+                    .font(.system(size: 11)).foregroundStyle(HelmColors.textTertiary)
                     .frame(width: 40, alignment: .trailing)
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 7)
-        .background(selected ? Color.white.opacity(0.09) : .clear,
-                    in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(selected ? HelmColors.surfaceHover : .clear,
+                    in: RoundedRectangle(cornerRadius: 7))
+        .overlay(alignment: .leading) {
+            if selected {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(choice.liveCount > 0 ? HelmColors.emerald : HelmColors.slate)
+                    .frame(width: 2)
+                    .padding(.vertical, 6)
+            }
+        }
         .padding(.horizontal, 8)
     }
 
